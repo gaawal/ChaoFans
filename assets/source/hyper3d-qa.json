@@ -1,0 +1,8 @@
+{
+  "source": "Hyper3D MCP \u2192 Blender 3.4.1 \u2192 GLB",
+  "meshes": 1,
+  "triangles": 30000,
+  "widthMeters": 4.2,
+  "textureMaxSize": 2048,
+  "file": "/models/hyper3d-cart.glb"
+}

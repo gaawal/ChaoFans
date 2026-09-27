@@ -1,0 +1,13 @@
+import {test} from 'node:test'
+import assert from 'node:assert/strict'
+import {act, tick, startGame, priceFor, STEPS, continueGame, chooseUpgrade} from './engine'
+const advance=(s:ReturnType<typeof startGame>,seconds:number)=>{for(let t=0;t<seconds;t+=.1)s=tick(s,.1,()=>.1);return s}
+test('all four menu prices match the brief',()=>{assert.deepEqual([[1,1],[1,2],[2,1],[2,2]].map(([m,v])=>priceFor(m,v)),[10,12,14,16])})
+test('wrong ingredient never skips a recipe step',()=>{let s=startGame();s=act(s,'sauce');assert.equal(s.step,0);assert.equal(s.combo,0);assert.equal(s.noticeKind,'bad')})
+test('hands collide when tossing before the spoon retracts',()=>{let s=startGame();s={...s,step:8,right:.2};s=act(s,'toss');assert.equal(s.lastAction,'collision');assert.equal(s.step,8);assert.equal(s.hits,0)})
+test('complete recipe settles money, bounded quality, XP and valid upgrade',()=>{let s=startGame(()=>.1);for(const step of STEPS)for(let i=0;i<step.hits;i++){s=advance(s,1);s=act(s,step.action)}assert.equal(s.phase,'result');assert.ok(s.coins>0);assert.ok(s.result!.score>=60);assert.ok(s.quality.every(q=>q>=0&&q<=100));s={...s,xp:100};s=continueGame(s,()=>.2);assert.equal(s.phase,'upgrade');assert.equal(s.choices.length,3);const skill=s.choices[0];s=chooseUpgrade(s,skill);assert.equal(s.skills[skill],1);assert.equal(s.phase,'playing');assert.equal(s.step,0)})
+test('pausing freezes patience and recipe timer',()=>{const s={...startGame(),phase:'paused' as const};assert.equal(tick(s,1),s)})
+test('timeout pays no coins, settles once, and cannot be farmed',()=>{let s=startGame();s.orders[0].patience=.1;s=tick(s,.2);assert.equal(s.phase,'result');assert.equal(s.coins,0);assert.equal(s.result?.failed,true);assert.equal(tick(s,.2),s);assert.equal(act(s,'serve'),s)})
+test('waiting past the cooking window burns quality',()=>{let s={...startGame(),quality:[80,80,80],elapsed:6};s=tick(s,.2);assert.ok(s.quality[0]<80);assert.equal(s.combo,0)})
+test('five orders form a complete shift with upgrades and clean restart boundaries',()=>{let s=startGame(()=>.2);for(let order=0;order<5;order++){for(const step of STEPS)for(let hit=0;hit<step.hits;hit++){s=advance(s,1);s=act(s,step.action)}assert.equal(s.phase,'result');s=continueGame(s,()=>.2);if(s.phase==='upgrade')s=chooseUpgrade(s,s.choices[0],()=>.2)}assert.equal(s.phase,'closed');assert.equal(s.completed,5);assert.ok(s.coins>=50);assert.ok(s.level>=2)})
+test('fire boost can pair with right-hand stirring and cannot bypass cooldown',()=>{let s={...startGame(),step:6};s=act(s,'stir');const boosted=act(s,'flame');assert.equal(boosted.lastAction,'flame');assert.ok(boosted.quality[1]>s.quality[1]);assert.equal(act(boosted,'flame'),boosted)})

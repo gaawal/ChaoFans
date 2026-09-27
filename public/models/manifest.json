@@ -1,0 +1,26 @@
+{
+  "source": "Hyper3D cart + Blender interactive station",
+  "layoutReference": [
+    "炒饭地摊三轮车.png",
+    "炒饭工作台.png"
+  ],
+  "interactiveNodes": [
+    "Wok",
+    "WokHandle"
+  ],
+  "hyper3dGenerated": true,
+  "assets": {
+    "station": {
+      "file": "street-station.glb",
+      "source": "Blender rebuilt from workbench reference",
+      "usage": "first-person interactive cooking"
+    },
+    "cart": {
+      "file": "hyper3d-cart.glb",
+      "source": "Hyper3D MCP then Blender",
+      "generation_id": "a9289f95-5c8d-4786-9b8a-78c1e730e0fd",
+      "usage": "menu showcase",
+      "triangles": 30000
+    }
+  }
+}

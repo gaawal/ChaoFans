@@ -1,0 +1,11 @@
+{
+  "reference_upload_ids": [
+    "026af29e-0618-4a4a-b73d-5befa11bec7e"
+  ],
+  "prompt": "Create ONE complete Chinese street fried-rice food vending cargo tricycle based on the large main assembled vehicle in the reference sheet. Cobalt blue enclosed driver cabin on the left, stainless steel cooking workbench with ingredient trays and a black wok on the right, four thin metal canopy posts, red blank illuminated signboard above, three black rubber wheels, red LPG tank at the rear. Preserve real functional proportions, open vendor side, warm stylized game-ready PBR materials. Ignore all small exploded-view components and duplicate vehicles in the sheet. No people, no surrounding floor, no background. One unified complete vehicle.",
+  "tier": "Gen-2.5-Medium",
+  "mesh_mode": "Raw",
+  "quality_override": 30000,
+  "texture_delight": true,
+  "geometry_file_format": "glb"
+}

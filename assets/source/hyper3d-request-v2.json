@@ -1,0 +1,11 @@
+{
+  "reference_upload_ids": [
+    "eeb4ad7e-e79b-4f34-80f8-727c9491ce94"
+  ],
+  "prompt": "One complete Chinese street food cargo tricycle. Match the single vehicle in the image: cobalt blue cabin, stainless steel fried rice cooking station, red overhead sign, metal canopy posts, red LPG tank, three wheels. Preserve the overall assembled vehicle structure and open serving side. No environment, no people, no extra vehicle or loose parts. Game-ready PBR model.",
+  "tier": "Gen-2.5-Medium",
+  "mesh_mode": "Raw",
+  "quality_override": 30000,
+  "texture_delight": true,
+  "geometry_file_format": "glb"
+}
