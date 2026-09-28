@@ -1,12 +1,12 @@
 /** Continuous, pointer-driven cooking. The App owns the only update loop. */
-import { WOK_HOME, LADLE_REST, resolvePan, settleHeight, panRestingOn } from './kitchen'
+import { WOK_HOME, LADLE_REST, KNOB, resolvePan, settleHeight, panRestingOn } from './kitchen'
 export type HandSide = 'left' | 'right'
-export type Ingredient = 'rice' | 'carrot' | 'onion' | 'bacon' | 'scallion' | 'egg'
+export type Ingredient = 'rice' | 'carrot' | 'onion' | 'bacon' | 'scallion' | 'egg' | 'corn' | 'peas' | 'ham'
 export type Bottle = 'oil' | 'soy' | 'oyster'
-export type Zone = 'wok' | 'handle' | Bottle | Ingredient | 'serve' | 'rest'
+export type Zone = 'wok' | 'handle' | 'knob' | Bottle | Ingredient | 'serve' | 'rest'
 export type Vec3 = [number, number, number]
 export type Phase = 'menu' | 'playing' | 'paused' | 'result' | 'upgrade' | 'closed'
-export type HandMode = 'idle' | 'holding' | 'stirring' | 'panning' | 'pouring' | 'scooping'
+export type HandMode = 'idle' | 'holding' | 'stirring' | 'panning' | 'pouring' | 'scooping' | 'turning'
 export type HeldItem = 'none' | 'ladle' | 'wok' | Bottle | 'scoop' | 'egg'
 export type Skill = 'pot' | 'spoon' | 'fire' | 'oil' | 'egg' | 'seasoning' | 'stamina'
 /** Gesture recognizer sends progress increments, rather than pointer velocity. */
@@ -59,6 +59,8 @@ export interface CookingState {
   food: Record<Ingredient | Bottle, number>
   quality: [number, number, number]
   temperature: number
+  /** Gas knob position, 0 = off. The knob itself is on the counter front lip. */
+  fire: number
   /** Short impulse for particle height and pan animation; decays every update. */
   toss: number
   /** Actual stirring rate, including motion the hand repeats after release. */
@@ -82,6 +84,7 @@ export interface CookingState {
 
 export const INGREDIENT_LABELS: Record<Ingredient, string> = {
   rice: '米饭', carrot: '胡萝卜丝', onion: '洋葱丝', bacon: '腊肉', scallion: '葱花', egg: '鸡蛋',
+  corn: '甜玉米粒', peas: '青豆', ham: '火腿丁',
 }
 export const BOTTLE_LABELS: Record<Bottle, string> = { oil: '食用油', soy: '酱油', oyster: '蚝油' }
 const POUR_RATES: Record<Bottle, number> = { oil: .24, soy: .2, oyster: .14 }
@@ -107,23 +110,37 @@ const hand = (side: HandSide): HandState => ({
   position: side === 'left' ? [-.5, 1.12, .9] : [.48, 1.12, .9],
   dragging: false, zone: 'rest', intensity: 0, scoopProgress: 0, circleProgress: 0, tilt: 0,
 })
-const emptyFood = (): CookingState['food'] => ({ rice: 0, carrot: 0, onion: 0, bacon: 0, scallion: 0, egg: 0, oil: 0, soy: 0, oyster: 0 })
+const emptyFood = (): CookingState['food'] => ({ rice: 0, carrot: 0, onion: 0, bacon: 0, scallion: 0, egg: 0, corn: 0, peas: 0, ham: 0, oil: 0, soy: 0, oyster: 0 })
 const emptySkills = (): CookingState['skills'] => ({ pot: 0, spoon: 0, fire: 0, oil: 0, egg: 0, seasoning: 0, stamina: 0 })
 
 export const priceFor = (meats: number, vegetables: number) => 4 + 4 * meats + 2 * vegetables
 
+/** The menu board. Each dish is a real combination with its own name. */
+const DISHES: { title: string; meats: Ingredient[]; vegetables: Ingredient[] }[] = [
+  { title: '腊味炒饭', meats: ['bacon'], vegetables: [] },
+  { title: '黄金蛋炒饭', meats: ['egg'], vegetables: [] },
+  { title: '火腿炒饭', meats: ['ham'], vegetables: [] },
+  { title: '田园素炒饭', meats: [], vegetables: ['carrot', 'onion'] },
+  { title: '金玉满堂炒饭', meats: ['egg'], vegetables: ['corn'] },
+  { title: '腊味双拼炒饭', meats: ['bacon', 'egg'], vegetables: ['onion'] },
+  { title: '扬州炒饭', meats: ['ham', 'egg'], vegetables: ['carrot', 'peas'] },
+  { title: '什锦炒饭', meats: [], vegetables: ['corn', 'peas', 'carrot'] },
+  { title: '五彩腊味炒饭', meats: ['bacon'], vegetables: ['carrot', 'corn', 'peas'] },
+  { title: '全料豪华炒饭', meats: ['ham', 'egg'], vegetables: ['onion', 'corn'] },
+]
+
 function makeOrder(id: number, random: () => number): CookingOrder {
-  // The first customer teaches one distinct meat and one vegetable. Later orders vary.
-  const meats: Ingredient[] = id === 1 ? ['bacon'] : random() < .5 ? [random() < .5 ? 'bacon' : 'egg'] : ['bacon', 'egg']
-  const vegetables: Ingredient[] = id === 1 ? ['carrot'] : random() < .5 ? [random() < .5 ? 'carrot' : 'onion'] : ['carrot', 'onion']
-  const ingredientKeys = [...meats, ...vegetables]
-  const names = ['下班的阿杰', '夜跑的小夏', '隔壁摊老陈', '加班的小周', '路过的阿岚']
-  const maxPatience = id === 1 ? 210 : 165
+  // The first customer teaches one distinct meat and one vegetable. Later orders come off the menu.
+  const dish = id === 1 ? { title: '腊肉胡萝卜炒饭', meats: ['bacon'] as Ingredient[], vegetables: ['carrot'] as Ingredient[] }
+    : DISHES[Math.floor(clamp(random(), 0, .999999) * DISHES.length)]
+  const ingredientKeys = [...dish.meats, ...dish.vegetables]
+  const names = ['下班的阿杰', '夜跑的小夏', '隔壁摊老陈', '加班的小周', '路过的阿岚', '收摊前的林叔', '写代码的阿棠', '刚下晚自习的小雨']
+  const maxPatience = id === 1 ? 210 : 108 + ingredientKeys.length * 23
   return {
     id, name: names[(id - 1) % names.length],
-    title: `${ingredientKeys.map(key => INGREDIENT_LABELS[key].replace('丝', '')).join('')}炒饭`,
+    title: dish.title,
     ingredients: ingredientKeys.map(key => INGREDIENT_LABELS[key]), ingredientKeys,
-    price: priceFor(meats.length, vegetables.length), patience: maxPatience, maxPatience,
+    price: priceFor(dish.meats.length, dish.vegetables.length), patience: maxPatience, maxPatience,
   }
 }
 
@@ -131,7 +148,7 @@ function initialState(random: () => number): CookingState {
   return {
     phase: 'menu', hands: { left: hand('left'), right: hand('right') }, pan: { position: [...WOK_HOME], tilt: 0, lift: 0 },
     ladle: { resting: false, spot: [0, LADLE_REST.y, LADLE_REST.z] }, food: emptyFood(),
-    quality: [0, 0, 0], temperature: .25, toss: 0, motion: 0, burnt: 0, cooked: 0, time: 0,
+    quality: [0, 0, 0], temperature: .25, fire: .65, toss: 0, motion: 0, burnt: 0, cooked: 0, time: 0,
     hint: '走近餐车，亲手炒出今晚的第一份饭。', event: 0,
     order: makeOrder(1, random), coins: 0, xp: 0, level: 1, completed: 0,
     result: null, upgrades: [], skills: emptySkills(), notice: '餐车就是你的厨房。',
@@ -150,7 +167,7 @@ export class CookingSimulation {
   private panWork = 0
   private cookTime = 0
   /** Heat follows the food, so a late addition cannot inherit a cooked batch. */
-  private ingredientHeat: Record<Ingredient, number> = { rice: 0, carrot: 0, onion: 0, bacon: 0, scallion: 0, egg: 0 }
+  private ingredientHeat: Record<Ingredient, number> = { rice: 0, carrot: 0, onion: 0, bacon: 0, scallion: 0, egg: 0, corn: 0, peas: 0, ham: 0 }
   private riceStirWork = 0
   private idleHotTime = 0
   private soyWarmth = 0
@@ -190,7 +207,7 @@ export class CookingSimulation {
     this.stirWork = 0
     this.panWork = 0
     this.cookTime = 0
-    this.ingredientHeat = { rice: 0, carrot: 0, onion: 0, bacon: 0, scallion: 0, egg: 0 }
+    this.ingredientHeat = { rice: 0, carrot: 0, onion: 0, bacon: 0, scallion: 0, egg: 0, corn: 0, peas: 0, ham: 0 }
     this.riceStirWork = 0
     this.idleHotTime = 0
     this.soyWarmth = 0
@@ -226,7 +243,7 @@ export class CookingSimulation {
     if (this.state.phase === 'closed') this.state = initialState(this.random)
     this.clearPan()
     this.state.phase = 'playing'
-    this.feedback('阿杰想吃腊肉胡萝卜炒饭。先抓起油瓶试试。')
+    this.feedback(`${this.state.order.name}想吃${this.state.order.title}。先抓起油瓶试试。`)
     this.updateHint()
     this.emit()
   }
@@ -324,8 +341,16 @@ export class CookingSimulation {
 
     const progress = (value?: number) => Number.isFinite(value) ? clamp(value!) : 0
     const spoon = current.held === 'ladle' || current.held === 'scoop'
-    // Merely crossing a bottle, handle, or ingredient never acquires it.
-    if (isBottle(current.held)) {
+    if (zone === 'knob') {
+      // The knob is absolute: wherever the hand drags across it is the setting.
+      current.mode = 'turning'
+      current.intensity = 0
+      const previous = this.state.fire
+      this.state.fire = clamp((point[0] - (KNOB.x - .105)) / .21)
+      if (Math.abs(this.state.fire - previous) > .04 && (this.state.fire === 0 || (previous === 0 && this.state.fire > 0))) {
+        this.feedback(this.state.fire === 0 ? '灶关了。往右推旋钮，火就回来。' : '开火了，火苗腾起来。')
+      }
+    } else if (isBottle(current.held)) {
       if (zone === 'wok') {
         current.circleProgress = clamp(current.circleProgress + progress(gesture.circle))
         current.tilt = clamp(Math.max(current.circleProgress, current.tilt + progress(gesture.tilt)))
@@ -439,6 +464,9 @@ export class CookingSimulation {
       } else {
         this.feedback('还提着锅。拖回灶口松手就放回锅架，拖到台面前沿松手就是彻底放手。')
       }
+    } else if (zone === 'knob') {
+      current.mode = current.held === 'none' ? 'idle' : 'holding'
+      this.feedback(this.state.fire <= .02 ? '火力关掉了。' : `火力调到 ${Math.round(this.state.fire * 100)}%。向右推是猛火，向左收是文火。`)
     } else if (isBottle(current.held)) {
       if (zone === current.held || zone === 'rest') {
         this.feedback(`${BOTTLE_LABELS[current.held]}瓶放回架上。`)
@@ -685,9 +713,11 @@ export class CookingSimulation {
     const panIntensity = SIDES.reduce((total, side) => total + (s.hands[side].mode === 'panning' ? s.hands[side].intensity : 0), 0)
     const panDistance = Math.hypot(s.pan.position[0] - WOK_HOME[0], s.pan.position[2] - WOK_HOME[2])
     const fireContact = clamp(1 - panDistance / .42) * clamp(1 - s.pan.lift / .18)
-    const heatTarget = .18 + fireContact * (.68 + panIntensity * .1 - s.food.rice * .04)
+    // The gas knob decides how much heat the burner can deliver at all; knob
+    // off means the pan drifts back down to the night air (0.15).
+    const heatTarget = .15 + fireContact * s.fire * (.85 + panIntensity * .1 - s.food.rice * .04)
     s.temperature += (heatTarget - s.temperature) * Math.min(1, dt * (fireContact > .5 ? .16 : .25))
-    const foodAmount = s.food.rice + s.food.bacon + s.food.egg + s.food.carrot + s.food.onion
+    const foodAmount = s.food.rice + s.food.bacon + s.food.egg + s.food.carrot + s.food.onion + s.food.corn + s.food.peas + s.food.ham
     if (foodAmount > 0) {
       this.cookTime += dt * s.temperature
       for (const ingredient of Object.keys(this.ingredientHeat) as Ingredient[]) {
@@ -726,7 +756,7 @@ export class CookingSimulation {
     const s = this.state, f = s.food
     const readiness = (Object.keys(this.ingredientHeat) as Ingredient[])
       .filter(ingredient => f[ingredient] > 0)
-      .map(ingredient => clamp(this.ingredientHeat[ingredient] / (ingredient === 'rice' ? 20 : ingredient === 'bacon' ? 12 : 7)))
+      .map(ingredient => clamp(this.ingredientHeat[ingredient] / (ingredient === 'rice' ? 20 : ingredient === 'bacon' || ingredient === 'ham' ? 12 : ingredient === 'corn' || ingredient === 'peas' ? 5 : 7)))
     s.cooked = readiness.length ? Math.min(...readiness) : 0
     const hasRice = clamp(f.rice / .65)
     const coating = clamp(f.oil / .35)
@@ -737,11 +767,12 @@ export class CookingSimulation {
     const cooked = clamp(this.ingredientHeat.rice / 20)
     const baconCooked = clamp(this.ingredientHeat.bacon / 12)
     const eggCooked = clamp(this.ingredientHeat.egg / 7)
+    const hamCooked = clamp(this.ingredientHeat.ham / 12)
     const matched = s.order.ingredientKeys.filter(key => f[key] > .3).length / s.order.ingredientKeys.length
     const dryPenalty = this.stirWork > 6 ? (1 - coating) * 9 : 0
-    const color = hasRice * (8 + clamp(this.riceStirWork / 18) * 51 + coating * 8 + f.egg * eggCooked * (15 + s.skills.egg * 6) + f.carrot * 8 + f.scallion * 8) - s.burnt * 80 - excessSoy * .6
-    const aroma = hasRice * (clamp(this.riceStirWork / 21) * 44 + baconCooked * f.bacon * 13 + eggCooked * f.egg * 5 + coating * (10 + s.skills.oil * 4) + clamp(this.panWork / 6) * 17 + seasoning * 8 + this.soyWarmth * 7 + complementarySauce * 4) - s.burnt * 60 - dryPenalty
-    const taste = hasRice * (cooked * 35 + matched * 21 + coating * 10 + seasoning * (22 + s.skills.seasoning * 5) + clamp(this.riceStirWork / 16) * 12 + complementarySauce * 4) - s.burnt * 70 - excessSoy - dryPenalty
+    const color = hasRice * (8 + clamp(this.riceStirWork / 18) * 51 + coating * 8 + f.egg * eggCooked * (15 + s.skills.egg * 6) + f.carrot * 8 + f.scallion * 8 + (f.corn + f.peas) * 7 + f.ham * hamCooked * 6) - s.burnt * 80 - excessSoy * .6
+    const aroma = hasRice * (clamp(this.riceStirWork / 21) * 44 + baconCooked * f.bacon * 13 + hamCooked * f.ham * 12 + eggCooked * f.egg * 5 + coating * (10 + s.skills.oil * 4) + clamp(this.panWork / 6) * 17 + seasoning * 8 + this.soyWarmth * 7 + complementarySauce * 4) - s.burnt * 60 - dryPenalty
+    const taste = hasRice * (cooked * 35 + matched * 21 + coating * 10 + seasoning * (22 + s.skills.seasoning * 5) + clamp(this.riceStirWork / 16) * 12 + complementarySauce * 4 + (f.corn + f.peas) * 5) - s.burnt * 70 - excessSoy - dryPenalty
     s.quality = [color, aroma, taste].map(value => clamp(value, 0, 100)) as [number, number, number]
   }
 
@@ -756,6 +787,7 @@ export class CookingSimulation {
       s.hint = '锅铲放在台面前沿了。拖一只空手盖到铲子上松手，就能重新拿起。'; return
     }
     if (s.food.oil < .15) { s.hint = '手拖到油瓶松开握住；再拖到锅口画一圈，把油倒进去。'; return }
+    if (s.fire <= .06) { s.hint = '灶还没开火。拖一只手到煤气旋钮上，向右推就是开火，越往右火越猛。'; return }
     const missing = s.order.ingredientKeys.find(key => s.food[key] < .3)
     if (missing) { s.hint = `客人要${INGREDIENT_LABELS[missing]}：用勺在备料盘里来回铲，再到锅里画圈翻勺。`; return }
     if (s.food.rice <= 0) { s.hint = '勺放进米饭盆，来回铲起米饭；移进锅里画圈翻勺。'; return }
@@ -770,7 +802,7 @@ export class CookingSimulation {
     this.recalculateQuality()
     const s = this.state
     const missing = s.order.ingredientKeys.filter(key => s.food[key] < .3).length
-    const undercooked = s.food.bacon > 0 && this.ingredientHeat.bacon < 12
+    const undercooked = (s.food.bacon > 0 && this.ingredientHeat.bacon < 12) || (s.food.ham > 0 && this.ingredientHeat.ham < 12)
     const score = failed ? 0 : Math.round(clamp(s.quality.reduce((sum, value) => sum + value, 0) / 3 - missing * 12 - (undercooked ? 15 : 0), 0, 100))
     const earned = failed ? 0 : Math.round(s.order.price * (score >= 82 ? 1.15 : score >= 55 ? 1 : score >= 30 ? .75 : .4))
     const xp = failed ? 5 : 20 + Math.round(score * .7)

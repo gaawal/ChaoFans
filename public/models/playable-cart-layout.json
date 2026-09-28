@@ -65,34 +65,44 @@
       0.07
     ],
     "carrot": [
-      0.565,
+      0.585,
       1.076,
-      0.205
+      0.315
     ],
     "onion": [
       0.925,
       1.076,
-      0.205
+      0.315
+    ],
+    "corn": [
+      0.585,
+      1.1,
+      0.06
+    ],
+    "peas": [
+      0.925,
+      1.1,
+      0.06
     ],
     "bacon": [
-      0.565,
-      1.112,
-      -0.09
+      0.585,
+      1.124,
+      -0.19
+    ],
+    "ham": [
+      0.925,
+      1.124,
+      -0.19
+    ],
+    "egg": [
+      0.585,
+      1.1480000000000001,
+      -0.44
     ],
     "scallion": [
       0.925,
-      1.112,
-      -0.09
-    ],
-    "egg": [
-      0.565,
-      1.1520000000000001,
-      -0.388
-    ],
-    "garnish": [
-      0.925,
-      1.1520000000000001,
-      -0.388
+      1.1480000000000001,
+      -0.44
     ]
   },
   "bottles": {
@@ -137,6 +147,11 @@
       -0.39,
       0.96,
       0.463
+    ],
+    "knob": [
+      -0.39,
+      0.985,
+      0.463
     ]
   },
   "handRest": {
@@ -162,7 +177,10 @@
     "bacon": "FoodPrototype_bacon",
     "rice": "FoodPrototype_rice",
     "scallion": "FoodPrototype_scallion",
-    "egg": "FoodPrototype_egg"
+    "egg": "FoodPrototype_egg",
+    "corn": "FoodPrototype_corn",
+    "peas": "FoodPrototype_peas",
+    "ham": "FoodPrototype_ham"
   },
   "nodes": {
     "static": "CartShell",

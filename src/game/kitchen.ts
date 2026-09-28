@@ -27,6 +27,8 @@ export const WOK_TRAVEL = .75
 export const WOK_MAX_LIFT = .55
 /** Pan floor height when it is set down anywhere on the stainless worktop. */
 export const WORKTOP = { top: 1.003, min: [-1.195, -.87], max: [1.195, .49] }
+/** The gas knob on the counter front lip, left of the stove. */
+export const KNOB = { x: -.39, z: .463 }
 /** The pan can be lowered to the worktop, but never through the bench itself. */
 const REST_FLOOR = WORKTOP.top - wokUnderside(0)
 
@@ -49,8 +51,8 @@ export interface Prop { name: string; min: [number, number]; max: [number, numbe
  * and one convex block keeps the pan from being wedged between two trays.
  */
 export const PROPS: Prop[] = [
-  { name: 'rice tray', min: [-.971, -.206], max: [-.499, .346], top: 1.071 },
-  { name: 'right tray bank', min: [.4165, -.5165], max: [1.0735, .3335], top: 1.147 },
+  { name: 'rice tray', min: [-.945, -.19], max: [-.525, .33], top: 1.071 },
+  { name: 'right tray bank', min: [.45, -.555], max: [1.06, .43], top: 1.147 },
   { name: 'condiment shelf', min: [-1.2, -1.2], max: [1.2, -.63], top: 1.4 },
 ]
 
@@ -161,7 +163,10 @@ export function panRestingOn(position: Vec3): 'rack' | 'worktop' | 'air' {
   const level = supportLevel(position[0], position[2])
   if (!Number.isFinite(level) || position[1] - level > .012) return 'air'
   const axis = Math.hypot(position[0] - TRIVET.x, position[2] - TRIVET.z)
-  return axis < TRIVET.outer + WOK_RADIUS ? 'rack' : 'worktop'
+  // The rack only claims pans resting at ring height. A pan flat on the bench
+  // right next to the burner is still on the worktop.
+  if (axis < TRIVET.outer + WOK_RADIUS && position[1] > TRIVET.level - .05) return 'rack'
+  return 'worktop'
 }
 
 /**

@@ -10,13 +10,13 @@ import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js'
 import {INGREDIENT_LABELS,type CookingSimulation,type HandSide,type Ingredient,type Zone,type Vec3} from '../game/simulation'
 import {WOK_HOME} from '../game/kitchen'
 
-type Layout={cameraMenu:Vec3;lookMenu:Vec3;cameraPlay:Vec3;lookPlay:Vec3;cameraFov:number;wokCenter:Vec3;wokRimHeight:number;wokRadius:number;foodSurface:Vec3;wokHandle:Vec3;burnerCenter:Vec3;trays:Record<string,Vec3>;bottles:Record<'oil'|'soy'|'oyster',Vec3>;tools:{serve:Vec3};handRest:Record<HandSide,Vec3>;handGripOffset:Vec3;prototypes:Record<Ingredient,string>}
+type Layout={cameraMenu:Vec3;lookMenu:Vec3;cameraPlay:Vec3;lookPlay:Vec3;cameraFov:number;wokCenter:Vec3;wokRimHeight:number;wokRadius:number;foodSurface:Vec3;wokHandle:Vec3;burnerCenter:Vec3;trays:Record<string,Vec3>;bottles:Record<'oil'|'soy'|'oyster',Vec3>;tools:{serve:Vec3;knob:Vec3};handRest:Record<HandSide,Vec3>;handGripOffset:Vec3;prototypes:Record<Ingredient,string>}
 type Options={simulation:CookingSimulation;onRenderer:(name:string)=>void;onReady:()=>void;onError:(message:string)=>void}
 const SIDES:HandSide[]=['left','right']
-const FOOD:Ingredient[]=['rice','carrot','onion','bacon','scallion','egg']
+const FOOD:Ingredient[]=['rice','carrot','onion','bacon','scallion','egg','corn','peas','ham']
 const v=(p:Vec3)=>new THREE.Vector3(...p)
 const clamp=THREE.MathUtils.clamp
-const maxFood:Record<Ingredient,number>={rice:1250,carrot:95,onion:70,bacon:38,scallion:150,egg:110}
+const maxFood:Record<Ingredient,number>={rice:1250,carrot:95,onion:70,bacon:38,scallion:150,egg:110,corn:130,peas:130,ham:40}
 
 /** Procedural VFX texture: no opaque cones or sphere-shaped smoke. */
 function effectTexture(smoke=false){
@@ -67,7 +67,7 @@ export async function createStreetScene(container:HTMLElement,{simulation,onRend
  const [layout,gltf]=await Promise.all([fetch('/models/playable-cart-layout.json').then(r=>{if(!r.ok)throw Error('layout');return r.json() as Promise<Layout>}),new GLTFLoader().loadAsync('/models/playable-cart.glb')])
  gltf.scene.updateMatrixWorld(true)
  const cart=new THREE.Group();cart.name='TheSamePlayableCart';scene.add(cart)
- const dynamicNames=new Set(['Wok','Bottle_oil','Bottle_soy','Bottle_oyster','Ladle','Hand_left','Hand_right','FoodPrototypes'])
+ const dynamicNames=new Set(['Wok','Bottle_oil','Bottle_soy','Bottle_oyster','Ladle','Hand_left','Hand_right','GasKnob','FoodPrototypes'])
  const microBytes=new Uint8Array(256*256*4)
  for(let i=0;i<256*256;i++){const n=116+Math.random()*22;microBytes.set([n,n,n,255],i*4)}
  const ironMicro=new THREE.DataTexture(microBytes,256,256);ironMicro.wrapS=ironMicro.wrapT=THREE.RepeatWrapping;ironMicro.repeat.set(14,14);ironMicro.needsUpdate=true
@@ -83,7 +83,7 @@ export async function createStreetScene(container:HTMLElement,{simulation,onRend
   source.traverse(o=>{if(o instanceof THREE.Mesh){const geo=o.geometry.clone();const transform=new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z).multiply(o.matrixWorld);geo.applyMatrix4(transform);const materials=Array.isArray(o.material)?o.material.map(prepareMat):prepareMat(o.material);const m=new THREE.Mesh(geo,materials);m.name=o.name;m.castShadow=true;m.receiveShadow=true;root.add(m)}})
   cart.add(root);return root
  }
-const wok=extract('Wok'),ladleTool=extract('Ladle'),hands={left:extract('Hand_left'),right:extract('Hand_right')},bottles={oil:extract('Bottle_oil'),soy:extract('Bottle_soy'),oyster:extract('Bottle_oyster')}
+const wok=extract('Wok'),ladleTool=extract('Ladle'),hands={left:extract('Hand_left'),right:extract('Hand_right')},bottles={oil:extract('Bottle_oil'),soy:extract('Bottle_soy'),oyster:extract('Bottle_oyster')},gasKnob=extract('GasKnob')
  const bottleHomes={oil:bottles.oil.position.clone(),soy:bottles.soy.position.clone(),oyster:bottles.oyster.position.clone()}
  // The retained Hyper3D shell and its Blender worktop stay present in both cameras.
  const batches=new Map<THREE.Material,THREE.BufferGeometry[]>()
@@ -124,9 +124,24 @@ const wok=extract('Wok'),ladleTool=extract('Ladle'),hands={left:extract('Hand_le
  const sheen=new THREE.Mesh(new THREE.CircleGeometry(.145,64),new THREE.MeshPhysicalMaterial({color:'#a98733',roughness:.12,metalness:.18,transparent:true,opacity:.52,clearcoat:1,side:THREE.DoubleSide,depthWrite:false}));sheen.rotation.x=-Math.PI/2;sheen.position.set(0,.007,0);wokFood.add(sheen)
  const flames=new THREE.Group();flames.position.copy(v(layout.burnerCenter));scene.add(flames)
  const flameTex=effectTexture(),smokeTex=effectTexture(true)
- const jets:THREE.Sprite[]=[],flares:THREE.Sprite[]=[],vapour:THREE.Sprite[]=[]
- for(let i=0;i<32;i++){const material=new THREE.SpriteMaterial({map:flameTex,color:i%4?'#408aff':'#8bbaff',transparent:true,opacity:.8,blending:THREE.AdditiveBlending,depthWrite:false});const sprite=new THREE.Sprite(material);const a=i/32*Math.PI*2;sprite.position.set(Math.cos(a)*.223,.04,Math.sin(a)*.223);sprite.scale.set(.025,.076,1);flames.add(sprite);jets.push(sprite)}
- for(let i=0;i<9;i++){const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:flameTex,color:'#ff8126',transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false}));flames.add(sprite);flares.push(sprite)}
+ // A gas ring reads as living fire only when it flickers in three layers: a
+ // small blue combustion core, a yellow body that dominates at high flame,
+ // and red-orange tongues that lick up and wander. All sizes breathe with
+ // independent noise, and the whole stack scales with the gas knob setting.
+ interface FlameLayer{spr:THREE.Sprite;ring:number;a:number;seed:number;speed:number;base:[number,number]}
+ const flameLayers:FlameLayer[]=[]
+ const addFlameLayer=(count:number,ring:number,colors:string[],base:[number,number],opacity:number,speed:number)=>{
+  for(let i=0;i<count;i++){
+   const material=new THREE.SpriteMaterial({map:flameTex,color:colors[i%colors.length],transparent:true,opacity,blending:THREE.AdditiveBlending,depthWrite:false})
+   const spr=new THREE.Sprite(material);flames.add(spr)
+   flameLayers.push({spr,ring,a:i/count*Math.PI*2,seed:Math.random()*20,speed,base})
+  }
+ }
+ addFlameLayer(14,.196,['#3f7dff','#5b9bff'],[.017,.052],.75,1)       // combustion core
+ addFlameLayer(18,.212,['#ffc23e','#ffd76a','#ffb02e'],[.026,.10],.85,1.6) // yellow body
+ addFlameLayer(14,.185,['#ff5a1f','#ff7a26','#e83c12'],[.034,.145],.8,2.3) // red tongues
+ const flameBlue=new THREE.Color('#3f7dff'),flameYellow=new THREE.Color('#ffc23e'),flameOrange=new THREE.Color('#ff7a26'),flameRed=new THREE.Color('#ff3d14')
+ const vapour:THREE.Sprite[]=[]
  for(let i=0;i<24;i++){const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:smokeTex,color:'#d9d3bc',transparent:true,opacity:0,depthWrite:false}));scene.add(sprite);vapour.push(sprite)}
  const streams={} as Record<HandSide,THREE.Mesh>
  SIDES.forEach(side=>{const stream=new THREE.Mesh(new THREE.CylinderGeometry(.002,.0035,1,9),new THREE.MeshPhysicalMaterial({color:'#bf8520',transparent:true,opacity:.8,roughness:.16,metalness:.08}));stream.visible=false;scene.add(stream);streams[side]=stream})
@@ -136,8 +151,9 @@ const wok=extract('Wok'),ladleTool=extract('Ladle'),hands={left:extract('Hand_le
  function addZone(zone:Zone,at:Vec3,size:Vec3,title:string){const proxy=new THREE.Mesh(new THREE.BoxGeometry(...size),new THREE.MeshBasicMaterial());proxy.position.copy(v(at));proxy.updateMatrixWorld();zones.push({zone,anchor:v(at),proxy,title})}
  addZone('wok',[0,1.18,0],[.57,.2,.57],'锅内 · 推拉翻炒 / 持料画圈翻勺')
  addZone('handle',layout.wokHandle,[.31,.18,.30],'锅柄 · 松手握住，再拖动提锅')
- for(const kind of FOOD)addZone(kind,layout.trays[kind],kind==='rice'?[.46,.16,.53]:[.30,.16,.26],INGREDIENT_LABELS[kind]+' · 持勺来回划动取料')
+ for(const kind of FOOD)addZone(kind,layout.trays[kind],kind==='rice'?[.44,.16,.52]:[.27,.16,.24],INGREDIENT_LABELS[kind]+' · 持勺来回划动取料')
  for(const kind of ['oil','soy','oyster'] as const)addZone(kind,[layout.bottles[kind][0],layout.bottles[kind][1]+.14,layout.bottles[kind][2]],[.16,.37,.17],({oil:'食用油',soy:'酱油',oyster:'蚝油'})[kind]+' · 松手抓住')
+ addZone('knob',[layout.tools.knob[0],layout.tools.knob[1]+.06,layout.tools.knob[2]],[.24,.17,.24],'煤气旋钮 · 按住手左右拖动调火力，越向右火越大')
  addZone('serve',layout.tools.serve,[.39,.17,.41],'出餐碗 · 把勺拖到这里松开')
 addZone('rest',[0,1.015,.43],[.50,.025,.14],'台面前沿 · 放下手里的东西，或空手拿起锅铲')
 const targetRing=new THREE.Mesh(new THREE.RingGeometry(.045,.05,48),new THREE.MeshBasicMaterial({color:'#e7c493',transparent:true,opacity:.8,side:THREE.DoubleSide,depthWrite:false}));targetRing.rotation.x=-Math.PI/2;targetRing.visible=false;scene.add(targetRing)
@@ -334,9 +350,32 @@ function onUp(e:PointerEvent){
   })
   sheen.visible=state.food.oil>0;sheen.scale.setScalar(.45+state.food.oil*.55)
   const onFlame=clamp(1-state.pan.lift/.3,0,1)*clamp(1-Math.hypot(state.pan.position[0],state.pan.position[2])/.5,0,1),activity=Math.max(panIntensity,state.toss*.8)*onFlame,foodQuantity=FOOD.reduce((sum,k)=>sum+state.food[k],0)
-  jets.forEach((j,i)=>{const flicker=.82+Math.sin(time*33+i*4)*.12+Math.sin(time*17+i)*.06;j.scale.y=.066*flicker*(.7+state.temperature*.5);j.material.rotation=Math.sin(time*8+i)*.12})
-  flares.forEach((f,i)=>{const a=i/9*Math.PI*2,flare=clamp(activity*.9+(state.hands.left.mode==='pouring'||state.hands.right.mode==='pouring'?.25:0),0,1);f.position.set(Math.cos(a)*.257,.09+flare*.055,Math.sin(a)*.257);f.scale.set(.037+Math.sin(i*7)*.012,(.12+flare*.23)*(.65+Math.sin(time*23+i*3)*.22),1);f.material.opacity=flare*(.31+Math.sin(time*27+i)*.15);f.material.rotation=Math.sin(time*9+i)*.16})
-  fireLight.intensity=.35+activity*1.3;fireLight.color.set(activity>.2?'#ffa54e':'#579cff')
+  // The gas knob physically turns with the setting: off points left, full
+  // open points right, sweeping through the back like a real stove valve.
+  gasKnob.rotation.y=Math.PI-clamp(state.fire,0,1)*Math.PI
+  const fire=clamp(state.fire,0,1)
+  for(const f of flameLayers){
+   // Three summed sines per flame read as turbulent combustion, never as a
+   // repeating pulse; every sprite carries its own phase.
+   const n=Math.sin(time*f.speed*7+f.seed)*.5+Math.sin(time*f.speed*13.7+f.seed*2.7)*.35+Math.sin(time*f.speed*23.3+f.seed*4.3)*.2
+   const h=f.base[1]*(.26+fire*(1.05+.55*n)+activity*.3)
+   const w=f.base[0]*(.65+fire*.55+.22*n)
+   f.spr.position.set(Math.cos(f.a)*f.ring+Math.sin(time*f.speed*4.7+f.seed*1.3)*.014*fire,h*.44,Math.sin(f.a)*f.ring+Math.cos(time*f.speed*3.9+f.seed*2.1)*.014*fire)
+   f.spr.scale.set(w,Math.max(.012,h),1)
+   f.spr.material.rotation=Math.sin(time*f.speed*3.1+f.seed)*.24
+   const pulse=.72+.28*Math.sin(time*f.speed*9.3+f.seed*3.7)
+   if(f.base[1]<.06){ // combustion core: stays gas-blue, fades as the roar takes over
+    f.spr.material.opacity=fire*(.5+.35*pulse)*(1-clamp(fire*.55,0,1))
+   }else if(f.base[1]<.12){ // body: small flame is blue-ish, big flame is yellow
+    f.spr.material.color.copy(flameBlue).lerp(flameYellow,clamp(fire*1.35,0,1))
+    f.spr.material.opacity=fire*(.55+.4*pulse)
+   }else{ // tongues: orange to deep red, strongest on a roaring fire
+    f.spr.material.color.copy(flameOrange).lerp(flameRed,clamp(fire*1.1,0,1))
+    f.spr.material.opacity=clamp(fire*1.25,0,1)*(.4+.45*pulse)
+   }
+  }
+  fireLight.intensity=.25+fire*1.35+activity*.9
+  fireLight.color.copy(flameBlue).lerp(flameYellow,clamp(fire*1.15,0,1))
   vapour.forEach((s,i)=>{const t=(time*.32+i/24)%1,amount=clamp(foodQuantity*.2,0,1);s.position.set(wok.position.x+Math.sin(i*5+t*3)*(.12+t*.12),wok.position.y+.16+t*.70,wok.position.z+Math.cos(i*7+t*2)*.14);s.scale.set(.10+t*.25,.17+t*.4,1);s.material.opacity=amount*state.temperature*(1-t)*.26;s.material.rotation=Math.sin(i+time*.2)*.18})
   if(drag&&hover){const zone=zones.find(z=>z.zone===hover)!;targetRing.visible=true;targetRing.position.copy(zone.anchor);targetRing.position.y=hover==='wok'?wok.position.y+.14:zone.anchor.y+.09;targetRing.scale.setScalar(hover==='wok'?3:1)}else targetRing.visible=false
   post.render();frame=requestAnimationFrame(draw)

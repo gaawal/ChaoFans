@@ -3,7 +3,7 @@ import {ArrowRight, Home, Pause, Play, Volume2, VolumeX, X} from 'lucide-react'
 import {createSimulation} from './game/simulation'
 import {createStreetScene} from './scene/StreetScene'
 
-const handModes: Record<string, string> = {idle:'等待操作',holding:'握持中',stirring:'持续翻炒',panning:'握住锅柄',pouring:'倾倒中',scooping:'取料中'}
+const handModes: Record<string, string> = {idle:'等待操作',holding:'握持中',stirring:'持续翻炒',panning:'握住锅柄',pouring:'倾倒中',scooping:'取料中',turning:'调火力'}
 const objects: Record<string, string> = {none:'空手',ladle:'锅铲',wok:'锅柄',oil:'油壶',soy:'酱油',oyster:'蚝油',scoop:'饭勺',egg:'鸡蛋'}
 
 function createCookingAudio() {
@@ -142,7 +142,7 @@ export default function App() {
       {state.phase === 'upgrade' && <div className="modal-backdrop"><section className="upgrade-modal" role="dialog" aria-modal="true" aria-label="选择厨艺升级"><span className="quiet-label">厨艺精进 · Lv.{state.level}</span><h2>顺手，再练一招。</h2><p>选择接下来想精进的手艺。</p><div className="upgrade-options">{state.upgrades.map((upgrade,index) => <button key={upgrade.id} onClick={() => simulation.chooseUpgrade(upgrade.id)}><small>0{index + 1}</small><h3>{upgrade.title}</h3><p>{upgrade.description}</p><span>选择这项手艺 <ArrowRight size={15}/></span></button>)}</div></section></div>}
       {state.phase === 'closed' && <div className="modal-backdrop"><section className="modal closed-modal" role="dialog" aria-modal="true" aria-label="今晚营业结束"><span className="quiet-label">今夜收摊</span><h2>锅还热着，夜已深了。</h2><p>共完成 {state.completed} 份炒饭。</p><div className="total-earned">¥{state.coins}<small>今晚营业额</small></div><button className="primary" onClick={start}>再摆一晚 <ArrowRight size={16}/></button><button className="text-button" onClick={returnHome}>回到餐车</button></section></div>}
     </>}
-    {help && <div className="modal-backdrop"><section className="modal help-modal" role="dialog" aria-modal="true" aria-label="鼠标操作说明"><button className="close-help icon-button" aria-label="关闭操作说明" onClick={closeHelp}><X size={18}/></button><span className="quiet-label">用鼠标，指挥两只手</span><h2>握住，拖动，再松手。</h2><ol className="help-steps"><li><span>01</span><div><h3>右手掌勺</h3><p>拖右手到锅里，来回推拉鼠标。松手后，它会保持翻炒，让你腾出鼠标控制另一只手。</p></div></li><li><span>02</span><div><h3>左手掌锅</h3><p>手拖到锅柄后松开握住。再次抓手，向上拖就能提锅离灶，快推快拉颠锅；下移放回炉上。</p></div></li><li><span>03</span><div><h3>取料、淋油与出餐</h3><p>持勺在食材上来回划动铲料，移到锅口画圈翻勺。瓶子先松手抓住，再在锅口画圈转腕；油、酱油、蚝油都能使用。炒好后，持勺拖到右边出餐碗松开。</p></div></li></ol><button className="primary" onClick={closeHelp}>回到餐车 <ArrowRight size={16}/></button></section></div>}
+    {help && <div className="modal-backdrop"><section className="modal help-modal" role="dialog" aria-modal="true" aria-label="鼠标操作说明"><button className="close-help icon-button" aria-label="关闭操作说明" onClick={closeHelp}><X size={18}/></button><span className="quiet-label">用鼠标，指挥两只手</span><h2>握住，拖动，再松手。</h2><ol className="help-steps"><li><span>01</span><div><h3>右手掌勺</h3><p>拖右手到锅里，来回推拉鼠标。松手后，它会保持翻炒，让你腾出鼠标控制另一只手。</p></div></li><li><span>02</span><div><h3>左手掌锅</h3><p>手拖到锅柄后松开握住。再次抓手，向上拖就能提锅离灶，快推快拉颠锅；下移放回炉上。</p></div></li><li><span>03</span><div><h3>取料、淋油与出餐</h3><p>持勺在食材上来回划动铲料，移到锅口画圈翻勺。瓶子先松手抓住，再在锅口画圈转腕；油、酱油、蚝油都能使用。灶台左前的煤气旋钮按住左右拖动调火力，猛火出锅气、文火防烧焦。炒好后，持勺拖到右边出餐碗松开。</p></div></li></ol><button className="primary" onClick={closeHelp}>回到餐车 <ArrowRight size={16}/></button></section></div>}
     {error && <div className="error-banner" role="alert">{error}</div>}
   </main>
 }

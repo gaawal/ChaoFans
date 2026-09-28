@@ -90,6 +90,10 @@ scallion=material('Scallion deep green',(.075,.27,.026),0,.39)
 scallionlight=material('Scallion light green cut',(.41,.61,.14),0,.39)
 eggmat=material('Beaten egg golden yolk',(.97,.53,.033),0,.23)
 eggshell=material('Eggshell warm white',(.79,.67,.47),0,.65)
+cornmat=material('Sweet corn kernel gold',(.95,.68,.055),0,.33)
+peasmat=material('Green pea jade',(.145,.44,.075),0,.35)
+hammat=material('Ham dice rosy cure',(.60,.145,.125),0,.37)
+hamfat=material('Ham dice fat marbling',(.85,.60,.50),0,.34)
 cream=material('Porcelain off white',(.84,.81,.72),0,.22)
 oil=material('Golden oil inside transparent bottle',(.78,.40,.019),0,.18,1,0)
 soy=material('Dark amber soy inside transparent bottle',(.044,.015,.004),0,.21,1,0)
@@ -228,7 +232,16 @@ for i in range(8):
     a=i*math.tau/8
     pts=[(r*math.cos(a),y,r*math.sin(a)) for r,y in TRIVET_PROFILE]
     tube('Cast iron pan support',pts,PRONG_RADIUS,darksteel,burner,2)
-cylinder('Flame control valve',(-.39,.95,.463),.038,.024,darksteel)
+# The gas knob lives on the counter front lip, left of the stove. The game
+# rotates the 'GasKnob' group around its vertical axis to match the fire level.
+knobroot=group('GasKnob',(-.39,.968,.463),cart)
+cylinder('Gas knob base',(-.39,.955,.463),.054,.020,darksteel,knobroot)
+cylinder('Gas knob cap',(-.39,.976,.463),.047,.024,rubber,knobroot)
+cylinder('Gas knob hub',(-.39,.993,.463),.010,.008,polish,knobroot)
+cube('Gas knob indicator',(-.356,.988,.463),(.042,.007,.011),polish,.002,knobroot)
+for i in range(11):
+    a=math.radians(-135+27*i)
+    cylinder('Gas knob tick',(-.39+math.cos(a)*.062,.961,.463+math.sin(a)*.062),.0026,.005,polish,knobroot,vertices=8)
 
 wok=group('Wok',(0,1.1,0))
 verts=[];faces=[];segments=112;rings=19
@@ -266,13 +279,18 @@ def tray(kind,x,z,w,d,y=1.006):
     food_roots[kind]=group('FoodPile_'+kind,(x,y+.028,z),root)
     return root
 
-tray('rice',-.735,.07,.46,.54)
-tray('carrot',.565,.205,.285,.245)
-tray('onion',.925,.205,.285,.245)
-tray('bacon',.565,-.09,.285,.245,1.042)
-tray('scallion',.925,-.09,.285,.245,1.042)
-tray('egg',.565,-.388,.285,.245,1.082)
-tray('garnish',.925,-.388,.285,.245,1.082)
+# Nine smaller pressed pans in a stepped 2x4 bank: more ingredients on the
+# same counter, each tray shallow enough to see its contents over the one
+# in front. Steps rise towards the back so nothing hides behind anything.
+tray('rice',-.735,.07,.40,.48)
+tray('carrot',.585,.315,.24,.205)
+tray('onion',.925,.315,.24,.205)
+tray('corn',.585,.06,.24,.205,1.030)
+tray('peas',.925,.06,.24,.205,1.030)
+tray('bacon',.585,-.19,.24,.205,1.054)
+tray('ham',.925,-.19,.24,.205,1.054)
+tray('egg',.585,-.44,.24,.205,1.078)
+tray('scallion',.925,-.44,.24,.205,1.078)
 
 # Food specimen meshes. The same prototypes are used for the tray pile and live particles.
 proto_group=group('FoodPrototypes',(0,0,0));proto_group['prototypes']=True
@@ -341,6 +359,22 @@ prototype('scallion',o)
 o=sphere('Egg curd',(0,0,0),(.013,.006,.009),eggmat,None,12,8)
 for v in o.data.vertices:v.co*=random.uniform(.79,1.16)
 bpy.context.view_layer.objects.active=o;o.select_set(True);bpy.ops.object.transform_apply(location=False,rotation=False,scale=True);o.select_set(False);prototype('egg',o)
+# Sweet corn: a plump rounded kernel, slightly squared, glossy gold.
+corn_kernel=sphere('Corn kernel',(0,0,0),(.0048,.0032,.0058),cornmat,None,12,8)
+bpy.context.view_layer.objects.active=corn_kernel;corn_kernel.select_set(True)
+bpy.ops.object.transform_apply(location=False,rotation=False,scale=True);corn_kernel.select_set(False)
+prototype('corn',corn_kernel)
+# Green peas: near-perfect small spheres with a faint dent.
+pea=sphere('Green pea',(0,0,0),(.0041,.0041,.0041),peasmat,None,12,8)
+bpy.context.view_layer.objects.active=pea;pea.select_set(True)
+bpy.ops.object.transform_apply(location=False,rotation=False,scale=True);pea.select_set(False)
+prototype('peas',pea)
+# Ham dice: a small beveled cube, rosy cure with one pale fat face.
+hamdice=cube('Ham dice',(0,0,0),(.017,.015,.017),hammat,.004,None)
+hamdice.data.materials.append(hamfat)
+for p in hamdice.data.polygons:
+    if p.index % 6 == 4:p.material_index=1
+prototype('ham',hamdice)
 
 def pile(kind,count,w,d,depth=.023):
     center=food_roots[kind].matrix_world.translation;proto=protos[kind];verts=[];faces=[];ids=[]
@@ -365,31 +399,36 @@ def pile(kind,count,w,d,depth=.023):
 # It is mostly below the grain surface and prevents the bin looking half empty.
 vs=[];fs=[];NX=20;NZ=24
 for j in range(NZ):
-    zz=(j/(NZ-1)-.5)*.478
+    zz=(j/(NZ-1)-.5)*.418
     for i in range(NX):
-        xx=(i/(NX-1)-.5)*.408
-        mound=max(0,(1-(xx/.25)**2)*(1-(zz/.29)**2))
+        xx=(i/(NX-1)-.5)*.348
+        mound=max(0,(1-(xx/.21)**2)*(1-(zz/.25)**2))
         yy=1.045+.031*mound+random.uniform(-.004,.004)
         vs.append((-.735+xx,yy,.07+zz))
 for j in range(NZ-1):
     for i in range(NX-1):a=j*NX+i;fs.append((a,a+NX,a+NX+1,a+1))
 mesh('Steamed rice filled mound',vs,fs,rice,food_roots['rice'])
-pile('rice',1250,.44,.50,.040)
-pile('carrot',175,.258,.220,.021)
-pile('onion',100,.25,.216,.026)
-pile('bacon',60,.242,.216,.018)
-pile('scallion',340,.25,.22,.020)
-# Glossy beaten egg is a visible liquid surface, with a few larger whole eggs beside it.
+pile('rice',1250,.36,.42,.040)
+pile('carrot',175,.215,.175,.021)
+pile('onion',100,.205,.170,.026)
+pile('bacon',60,.195,.170,.018)
+pile('scallion',340,.20,.170,.020)
+pile('corn',260,.20,.170,.013)
+pile('peas',260,.20,.170,.012)
+pile('ham',80,.195,.170,.015)
+# Glossy beaten egg is a visible liquid surface, with a few larger whole eggs
+# parked between the rice bin and the stove where the old garnish tray used to be.
 eggvs=[];eggfs=[]
 for cx,cz,a in [(.105,.085,0),(-.105,.085,90),(-.105,-.085,180),(.105,-.085,270)]:
     for j in range(12):
-        t=math.radians(a+j*90/12);eggvs.append((.565+cx+.019*math.cos(t),1.134,-.388+cz+.019*math.sin(t)))
+        t=math.radians(a+j*90/12);eggvs.append((.585+cx+.019*math.cos(t),1.130,-.44+cz+.019*math.sin(t)))
 eggfs.append(tuple(reversed(range(48))))
 mesh('Golden beaten egg liquid surface',eggvs,eggfs,eggmat,food_roots['egg'])
-for i in range(3):sphere('Unbroken egg',(.87+(i%2)*.08,1.163+(i//2)*.018,-.43+(i//2)*.10),(.035,.044,.035),eggshell,food_roots['garnish'],32,18)
+for i,ex,ez in [(0,-.44,.33),(1,-.52,.375),(2,-.45,.415)]:
+    sphere('Unbroken egg',(ex,1.047,ez),(.035,.044,.035),eggshell,cart,32,18)
 for i in range(10):
-    x=random.uniform(.485,.645);z=random.uniform(-.446,-.33)
-    torus('Egg surface bubble',(x,1.1347,z),random.uniform(.0017,.0035),.0006,cream,food_roots['egg'])
+    x=random.uniform(.505,.665);z=random.uniform(-.498,-.382)
+    torus('Egg surface bubble',(x,1.1307,z),random.uniform(.0017,.0035),.0006,cream,food_roots['egg'])
 
 # The rice tray stays open. A hinged lid used to stand here, 47 cm of sheet
 # steel between the cook and the condiment shelf: it hid the lower half of the
@@ -534,7 +573,7 @@ layout={
     'wokHandle':[-.43,1.28,.44], 'burnerCenter':[0,1.055,0],
     'trays':anchors,
     'bottles':{'oil':[-.91,1.147,-.68],'soy':[-.71,1.147,-.68],'oyster':[-.50,1.147,-.68]},
-    'tools':{'ladle':[.30,1.28,.38],'ladleGrip':[.30,1.28,.38],'ladleBowl':[.30,1.218,-.024],'serve':[1.45,1.014,-.04],'burner':[-.39,.96,.463]},
+    'tools':{'ladle':[.30,1.28,.38],'ladleGrip':[.30,1.28,.38],'ladleBowl':[.30,1.218,-.024],'serve':[1.45,1.014,-.04],'burner':[-.39,.96,.463],'knob':[-.39,.985,.463]},
     'handRest':hand_rests,'handGripOffset':[0,-.025,-.105],
     'prototypes':{k:'FoodPrototype_'+k for k in protos},
     'nodes':{'static':'CartShell','wok':'Wok','ladle':'Ladle','oil':'Bottle_oil','soy':'Bottle_soy','oyster':'Bottle_oyster','leftHand':'Hand_left','rightHand':'Hand_right'},

@@ -18,6 +18,57 @@ function start() {
   return sim
 }
 
+const KNOB: Vec3 = [-.39, 1.15, .463]
+
+test('the gas knob sets the fire level absolutely, and the burner answers to it', () => {
+  const sim = start()
+  assert.equal(sim.state.fire, .65)
+  // Drag the hand across the knob: the further right, the stronger the flame.
+  sim.beginDrag('left')
+  sim.moveHand('left', 'knob', [-.495, 1.15, .463], .4)
+  assert.equal(sim.state.fire, 0)
+  sim.moveHand('left', 'knob', [-.285, 1.15, .463], .4)
+  assert.equal(sim.state.fire, 1)
+  sim.moveHand('left', 'knob', [-.39, 1.15, .463], .4)
+  assert.ok(Math.abs(sim.state.fire - .5) < 1e-8)
+  sim.endDrag('left', 'knob')
+  assert.match(sim.state.notice, /火力调到 50%/)
+  // Off flame, the pan over the burner cools; wide open, it climbs past .8.
+  sim.beginDrag('left')
+  sim.moveHand('left', 'knob', [-.495, 1.15, .463], .4)
+  sim.endDrag('left', 'knob')
+  advance(sim, 30)
+  const cold = sim.state.temperature
+  assert.ok(cold < .2, `burner off should cool the pan, got ${cold}`)
+  sim.beginDrag('left')
+  sim.moveHand('left', 'knob', [-.285, 1.15, .463], .4)
+  sim.endDrag('left', 'knob')
+  advance(sim, 30)
+  assert.ok(sim.state.temperature > .75, `full flame should be hot, got ${sim.state.temperature}`)
+})
+
+test('orders come off a menu of named dishes with matching ingredients', () => {
+  // A varied random so the dish book is actually sampled, not one dish ten times.
+  let seed = 7
+  const random = () => { seed = (seed * 37 + 11) % 97; return seed / 97 }
+  const sim = createSimulation(random)
+  sim.start()
+  // Order 1 still teaches bacon and carrot by name.
+  assert.equal(sim.state.order.title, '腊肉胡萝卜炒饭')
+  assert.deepEqual(sim.state.order.ingredientKeys, ['bacon', 'carrot'])
+  const seen = new Set<string>()
+  for (let id = 2; id <= 5; id++) {
+    sim.state.completed = id - 1
+    sim.state.phase = 'result'
+    sim.continue()
+    const order = sim.state.order
+    assert.ok(order.title.length >= 4, `dish title should be a real name, got ${order.title}`)
+    assert.ok(order.ingredientKeys.length >= 1)
+    seen.add(order.title)
+  }
+  assert.ok(seen.size >= 2, 'the menu should serve more than one dish')
+})
+
 function ingredient(sim: CookingSimulation, kind: Ingredient, side: HandSide = 'right') {
   sim.beginDrag(side)
   if (sim.state.hands[side].held === 'none') {
@@ -473,8 +524,9 @@ test('letting go of a lifted wok puts it down on a real surface', () => {
   sim.moveHand('left', 'handle', HANDLE, .2)
   sim.endDrag('left', 'handle')
   sim.beginDrag('left')
-  // Carry it off the stove, above the right end of the worktop, then open the hand.
-  sim.moveHand('left', null, [-.07, 1.78, .89], .3)
+  // Carry it off the stove, above the open worktop left of the tray bank, then
+  // open the hand. The bank itself would catch the pan at its own rim height.
+  sim.moveHand('left', null, [-.5, 1.78, .89], .3)
   assert.ok(sim.state.pan.lift > .4)
   sim.endDrag('left', 'rest')
   assert.equal(sim.state.hands.left.held, 'none')
@@ -694,7 +746,8 @@ test('five physical orders progress through upgrades and finish the shift', () =
     }
   }
   assert.equal(sim.state.phase, 'closed')
-  assert.ok(sim.state.coins >= 50)
+  // The menu now includes cheap vegetable dishes, so five orders start at ¥40.
+  assert.ok(sim.state.coins >= 40)
   assert.ok(sim.state.level >= 2)
   sim.reset()
   assert.equal(sim.state.phase, 'menu')
