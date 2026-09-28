@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createSimulation, priceFor, type Bottle, type CookingSimulation, type HandSide, type Ingredient, type Vec3, type Zone } from './simulation'
+import { LADLE_REST, WOK_HOME, WORKTOP, panRestingOn, resolvePan, settleHeight } from './kitchen'
 
 const WOK: Vec3 = [0, 1.2, 0]
 const HANDLE: Vec3 = [-.43, 1.28, .44]
@@ -535,6 +536,153 @@ test('letting go of a lifted wok puts it down on a real surface', () => {
   assert.equal(sim.state.pan.lift, 0)
   assert.ok(Math.abs(sim.state.pan.position[1] - 1.0039) < 1e-6, `landed at ${sim.state.pan.position[1]}`)
   assert.match(sim.state.notice, /台面/)
+})
+
+test('putDown opens a stirring hand and parks the single ladle without needing a drag', () => {
+  const sim = start()
+  stir(sim)
+  advance(sim, .2)
+  assert.ok(sim.state.motion > .7)
+  const leftBefore = JSON.stringify(sim.state.hands.left)
+  sim.putDown('right')
+  const right = sim.state.hands.right
+  assert.equal(right.held, 'none')
+  assert.equal(right.mode, 'idle')
+  assert.equal(right.dragging, false)
+  assert.equal(right.releasedAt, sim.state.time)
+  assert.equal(sim.state.motion, 0)
+  assert.equal(sim.state.ladle.resting, true)
+  assert.equal(JSON.stringify(sim.state.hands.left), leftBefore)
+  advance(sim, 2)
+  assert.equal(sim.state.motion, 0)
+
+  // Picking it up again cannot resurrect the previous learned rhythm.
+  sim.beginDrag('right')
+  sim.moveHand('right', 'rest', HANDLE, .2)
+  sim.endDrag('right', 'rest')
+  sim.beginDrag('right')
+  sim.moveHand('right', 'wok', WOK, 0)
+  sim.endDrag('right', 'wok')
+  assert.equal(sim.state.hands.right.held, 'ladle')
+  assert.equal(sim.state.ladle.resting, false)
+  assert.equal(sim.state.motion, 0)
+})
+
+test('putDown returns a loaded scoop and cancels the drag without duplicating the ladle', () => {
+  const sim = start()
+  sim.beginDrag('right')
+  scoop(sim, 'bacon')
+  sim.moveHand('right', 'wok', WOK, .2, { circle: .5 })
+  assert.equal(sim.state.hands.right.payload, 'bacon')
+  const foodBefore = { ...sim.state.food }
+  sim.putDown('right')
+  const right = sim.state.hands.right
+  assert.equal(right.held, 'none')
+  assert.equal(right.payload, null)
+  assert.equal(right.dragging, false)
+  assert.equal(right.scoopProgress, 0)
+  assert.equal(right.circleProgress, 0)
+  assert.equal(right.tilt, 0)
+  assert.equal(sim.state.ladle.resting, true)
+  assert.deepEqual(sim.state.ladle.spot, [0, LADLE_REST.y, LADLE_REST.z])
+  assert.match(sim.state.notice, /腊肉倒回备料盘/)
+  // A delayed pointer-up from the interrupted drag must not take it back.
+  sim.endDrag('right', 'rest')
+  assert.equal(right.held, 'none')
+  assert.deepEqual(sim.state.food, foodBefore)
+  for (const side of ['left', 'right'] as const) {
+    sim.beginDrag(side)
+    sim.moveHand(side, 'rest', HANDLE, .2)
+    sim.endDrag(side, 'rest')
+  }
+  assert.equal(sim.state.hands.left.held, 'ladle')
+  assert.equal(sim.state.hands.right.held, 'none')
+  assert.equal(sim.state.ladle.resting, false)
+})
+
+test('putDown returns each bottle and immediately stops an active pour', () => {
+  const sim = start()
+  for (const kind of ['oil', 'soy', 'oyster'] as const) {
+    sim.beginDrag('left')
+    sim.moveHand('left', kind, TRAY, .2)
+    sim.endDrag('left', kind)
+    sim.beginDrag('left')
+    circle(sim, 'left')
+    advance(sim, .2)
+    assert.equal(sim.state.hands.left.mode, 'pouring')
+    const amount = sim.state.food[kind]
+    sim.putDown('left')
+    assert.equal(sim.state.hands.left.held, 'none')
+    assert.equal(sim.state.hands.left.dragging, false)
+    assert.equal(sim.state.hands.left.tilt, 0)
+    assert.equal(sim.state.hands.left.releasedAt, sim.state.time)
+    assert.match(sim.state.notice, /瓶放回架上/)
+    advance(sim, 1)
+    assert.equal(sim.state.food[kind], amount)
+    assert.equal(sim.state.hands.right.held, 'ladle')
+    assert.equal(sim.state.ladle.resting, false)
+  }
+})
+
+test('putDown lands the wok on support from low, raised, blocked, and off-edge positions', () => {
+  const positions: Vec3[] = [
+    [0, 1.5, 0], [-.07, 1.5, .45], [-.07, 1.11, .45],
+    [.6, 1.5, 0], [-.6, 1.5, 0], [0, 1.5, .75],
+  ]
+  for (const position of positions) {
+    const sim = start()
+    sim.beginDrag('left')
+    sim.moveHand('left', 'handle', HANDLE, .2)
+    sim.endDrag('left', 'handle')
+    sim.beginDrag('left')
+    sim.moveHand('left', null, position.map((value, i) => value + HANDLE[i] - WOK_HOME[i]) as Vec3, .3)
+    const carried = [...sim.state.pan.position]
+    sim.putDown('left')
+    assert.equal(sim.state.hands.left.held, 'none')
+    assert.equal(sim.state.hands.left.dragging, false)
+    assert.equal(sim.state.hands.left.releasedAt, 0)
+    assert.deepEqual(sim.state.pan.position, carried, 'putting down begins a descent instead of teleporting')
+    advance(sim, 3)
+    const landed = sim.state.pan.position
+    assert.notEqual(panRestingOn(landed), 'air', `released at ${position}, landed at ${landed}`)
+    assert.ok(landed[2] > WORKTOP.min[1] && landed[2] < WORKTOP.max[1], `centre must be supported at ${landed}`)
+    assert.ok(Math.abs(landed[1] - settleHeight(landed[0], landed[2])!) < .005)
+    assert.deepEqual(resolvePan(landed).position, landed, 'landing must clear trays and the shelf')
+    assert.equal(sim.state.pan.tilt, 0)
+    if (position[2] > WORKTOP.max[1]) assert.deepEqual(landed, WOK_HOME, 'an unstable edge release returns to the rack')
+    const resting = [...landed]
+    advance(sim, 1)
+    assert.deepEqual(sim.state.pan.position, resting)
+  }
+})
+
+test('an explicit wok put-down keeps settling after pause', () => {
+  const sim = start()
+  sim.beginDrag('left')
+  sim.moveHand('left', 'handle', HANDLE, .2)
+  sim.endDrag('left', 'handle')
+  sim.beginDrag('left')
+  sim.moveHand('left', null, [-.5, 1.78, .89], .3)
+  sim.putDown('left')
+  sim.setPaused(true)
+  const notice = sim.state.notice
+  advance(sim, 2)
+  assert.equal(sim.state.hands.left.held, 'none')
+  assert.equal(panRestingOn(sim.state.pan.position), 'worktop')
+  assert.equal(sim.state.notice, notice)
+})
+
+test('putDown is a no-op for an empty hand and outside active play', () => {
+  const sim = start()
+  const active = JSON.stringify(sim.state)
+  sim.putDown('left')
+  assert.equal(JSON.stringify(sim.state), active)
+  for (const phase of ['menu', 'paused', 'result', 'upgrade', 'closed'] as const) {
+    sim.state.phase = phase
+    const before = JSON.stringify(sim.state)
+    sim.putDown('right')
+    assert.equal(JSON.stringify(sim.state), before)
+  }
 })
 
 test('wok movement is constrained and crossing a tray never swaps it for ingredients', () => {

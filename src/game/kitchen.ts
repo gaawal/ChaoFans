@@ -158,6 +158,29 @@ export function settleHeight(x: number, z: number) {
   return Number.isFinite(support) ? support : null
 }
 
+/**
+ * A safe place to put the pan down, using the nearest clear space under it.
+ * The collision solver slides a landing out of tray/shelf footprints. A rim
+ * overlapping the counter edge is not enough support: if the centre cannot
+ * rest on the worktop, return the pan to its rack.
+ */
+export function panRestTarget(position: Vec3): Vec3 {
+  let [x, , z] = position
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)
+      || x <= WORKTOP.min[0] || x >= WORKTOP.max[0]
+      || z <= WORKTOP.min[1] || z >= WORKTOP.max[1]) return [...WOK_HOME]
+    const below = settleHeight(x, z)
+    if (below === null) return [...WOK_HOME]
+    const target = resolvePan([x, below, z]).position
+    if (Math.hypot(target[0] - x, target[2] - z) < 1e-6
+      && Math.abs(target[1] - below) < 1e-6
+      && !propHit(target[0], target[2], target[1])) return target
+    ;[x, , z] = target
+  }
+  return [...WOK_HOME]
+}
+
 /** What a pan is sitting on: the stove ring, the worktop, or nothing at all. */
 export function panRestingOn(position: Vec3): 'rack' | 'worktop' | 'air' {
   const level = supportLevel(position[0], position[2])

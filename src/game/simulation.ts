@@ -1,5 +1,5 @@
 /** Continuous, pointer-driven cooking. The App owns the only update loop. */
-import { WOK_HOME, LADLE_REST, KNOB, resolvePan, settleHeight, panRestingOn } from './kitchen'
+import { WOK_HOME, LADLE_REST, KNOB, resolvePan, panRestTarget, panRestingOn } from './kitchen'
 export type HandSide = 'left' | 'right'
 export type Ingredient = 'rice' | 'carrot' | 'onion' | 'bacon' | 'scallion' | 'egg' | 'corn' | 'peas' | 'ham'
 export type Bottle = 'oil' | 'soy' | 'oyster'
@@ -24,6 +24,8 @@ export interface HandState {
   scoopProgress: number
   circleProgress: number
   tilt: number
+  /** Simulation time of the last actual put-down, for a short open-hand pose. */
+  releasedAt: number | null
 }
 
 export interface CookingOrder {
@@ -108,7 +110,7 @@ const hand = (side: HandSide): HandState => ({
   held: side === 'right' ? 'ladle' : 'none',
   payload: null,
   position: side === 'left' ? [-.5, 1.12, .9] : [.48, 1.12, .9],
-  dragging: false, zone: 'rest', intensity: 0, scoopProgress: 0, circleProgress: 0, tilt: 0,
+  dragging: false, zone: 'rest', intensity: 0, scoopProgress: 0, circleProgress: 0, tilt: 0, releasedAt: null,
 })
 const emptyFood = (): CookingState['food'] => ({ rice: 0, carrot: 0, onion: 0, bacon: 0, scallion: 0, egg: 0, corn: 0, peas: 0, ham: 0, oil: 0, soy: 0, oyster: 0 })
 const emptySkills = (): CookingState['skills'] => ({ pot: 0, spoon: 0, fire: 0, oil: 0, egg: 0, seasoning: 0, stamina: 0 })
@@ -455,12 +457,8 @@ export class CookingSimulation {
           this.feedback('锅稳稳落在锅架上了。')
         }
       } else if (zone === 'rest') {
-        // Letting go: the hand opens and the pan settles onto whatever is below.
-        this.releaseObject(side)
-        const pan = this.state.pan.position
-        const below = settleHeight(pan[0], pan[2])
-        if (below !== null && this.state.pan.lift > .02) this.panSettle = [pan[0], below, pan[2]]
-        this.feedback(below === null ? '手松开锅柄了，锅还悬在半空。' : '手松开锅柄了，锅落在锅台面上。')
+        this.putDown(side)
+        return
       } else {
         this.feedback('还提着锅。拖回灶口松手就放回锅架，拖到台面前沿松手就是彻底放手。')
       }
@@ -469,8 +467,8 @@ export class CookingSimulation {
       this.feedback(this.state.fire <= .02 ? '火力关掉了。' : `火力调到 ${Math.round(this.state.fire * 100)}%。向右推是猛火，向左收是文火。`)
     } else if (isBottle(current.held)) {
       if (zone === current.held || zone === 'rest') {
-        this.feedback(`${BOTTLE_LABELS[current.held]}瓶放回架上。`)
-        this.releaseObject(side)
+        this.putDown(side)
+        return
       } else {
         current.mode = 'holding'
         current.intensity = 0
@@ -478,7 +476,8 @@ export class CookingSimulation {
       }
     } else if (current.payload) {
       if (zone === 'rest') {
-        this.layDownLadle(side, `${INGREDIENT_LABELS[current.payload]}倒回备料盘，锅铲也搁在台面上了。`)
+        this.putDown(side)
+        return
       } else {
         current.mode = 'scooping'
         current.intensity = 0
@@ -532,12 +531,43 @@ export class CookingSimulation {
     } else if (zone === 'rest') {
       // The front strip is the shared shelf: put down what is in hand, take the ladle back.
       if (current.held === 'none') this.takeLadle(side)
-      else if (this.holdsLadle(current)) this.layDownLadle(side, '锅铲放在台面前沿了。')
-      else this.releaseObject(side)
+      else {
+        this.putDown(side)
+        return
+      }
     } else {
       current.mode = current.held === 'none' ? 'idle' : 'holding'
       current.intensity = 0
       this.learned[side] = 0
+    }
+    this.refreshMotion()
+    this.recalculateQuality()
+    this.updateHint()
+    this.emit()
+  }
+
+  /** Explicitly open this hand and safely return its object, with or without a drag. */
+  putDown = (side: HandSide) => {
+    if (this.state.phase !== 'playing') return
+    const current = this.state.hands[side]
+    if (current.held === 'none') return
+    if (current.held === 'wok') {
+      this.panSettle = panRestTarget(this.state.pan.position)
+      this.releaseObject(side)
+      this.feedback(panRestingOn(this.panSettle) === 'rack'
+        ? '松开锅柄，正在把锅放回锅架。' : '松开锅柄，正在把锅放到台面上。')
+    } else if (isBottle(current.held)) {
+      const label = BOTTLE_LABELS[current.held]
+      this.releaseObject(side)
+      this.feedback(`${label}瓶放回架上。`)
+    } else if (this.holdsLadle(current)) {
+      const notice = current.payload
+        ? `${INGREDIENT_LABELS[current.payload]}倒回备料盘，锅铲也搁在台面上了。`
+        : '锅铲放在台面前沿了。'
+      this.layDownLadle(side, notice)
+    } else {
+      this.releaseObject(side)
+      this.feedback('手里的食材放回备料盘了。')
     }
     this.refreshMotion()
     this.recalculateQuality()
@@ -566,15 +596,19 @@ export class CookingSimulation {
 
   private releaseObject(side: HandSide) {
     const current = this.state.hands[side]
+    current.releasedAt = this.state.time
     current.held = 'none'
     current.payload = null
     current.mode = 'idle'
+    current.dragging = false
+    current.zone = 'rest'
     current.intensity = 0
     current.scoopProgress = 0
     current.circleProgress = 0
     current.tilt = 0
     this.scoopKind[side] = null
     this.learned[side] = 0
+    this.lastStirMotion[side] = 0
   }
 
   private holdsLadle(current: HandState) {
@@ -588,15 +622,7 @@ export class CookingSimulation {
       resting: true,
       spot: [clamp(current.position[0], -LADLE_REST.xLimit, LADLE_REST.xLimit), LADLE_REST.y, LADLE_REST.z],
     }
-    current.held = 'none'
-    current.payload = null
-    current.mode = 'idle'
-    current.intensity = 0
-    current.scoopProgress = 0
-    current.circleProgress = 0
-    current.tilt = 0
-    this.scoopKind[side] = null
-    this.learned[side] = 0
+    this.releaseObject(side)
     this.feedback(notice)
   }
 
@@ -657,7 +683,7 @@ export class CookingSimulation {
     const landed = distance <= .001 || distance <= 1.1 * dt
     const next: Vec3 = landed ? [...target] : pan.position.map((value, i) => value + step[i] / distance * 1.1 * dt) as Vec3
     const solved = resolvePan(next)
-    this.state.pan = { position: solved.position, lift: clamp(solved.position[1] - WOK_HOME[1], 0, .55), tilt: pan.tilt }
+    this.state.pan = { position: solved.position, lift: clamp(solved.position[1] - WOK_HOME[1], 0, .55), tilt: landed ? 0 : pan.tilt }
     const holder = SIDES.find(side => this.state.hands[side].held === 'wok')
     if (holder) {
       // The gripping hand rides down with the handle it is holding.

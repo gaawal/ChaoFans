@@ -504,12 +504,12 @@ for j in range(R-1):
     for i in range(N):a=j*N+i;b=j*N+(i+1)%N;fs.append((a,b,b+N,a+N))
 head=mesh('Ladle deep steel bowl',vs,fs,polish,ladle);solid=head.modifiers.new('Ladle steel thickness','SOLIDIFY');solid.thickness=.002
 
-# Anatomical sculpted hands: continuous remeshed palm/forearm with curved tapered fingers.
+# Anatomical sculpted hands: continuous skin, with three deforming joints per finger.
 # The wrist origin is local [0,0,0], fingertips point -Z and the back faces +Y.
 hand_rests={'left':[-.39,1.10,.66],'right':[.39,1.10,.66]}
 def build_hand(side):
     mirror=-1 if side=='left' else 1;at=hand_rests[side];root=group('Hand_'+side,at)
-    root['pivot']='wrist; fingertips -Z, hand back +Y';parts=[]
+    root['pivot']='wrist; fingertips -Z, hand back +Y';root['handSide']=side;root['handRig']='anatomical-16-joints';parts=[]
     def H(p):return (at[0]+p[0]*mirror,at[1]+p[1],at[2]+p[2])
     # Ellipsoid palm naturally tapers into a narrower wrist; forearm broadens toward viewer.
     parts.append(sphere('Palm '+side,H((0,0,-.070)),(.045,.022,.063),skin,root,40,24))
@@ -522,26 +522,28 @@ def build_hand(side):
         for i in range(N):a=j*N+i;b=j*N+(i+1)%N;fs.append((a,b,b+N,a+N))
     fs.append(tuple(range(N-1,-1,-1)));fs.append(tuple(5*N+i for i in range(N)))
     parts.append(mesh('Forearm '+side,vs,fs,skin,root))
-    # Distal joints curve down and back to form a relaxed utensil grip.
-    fingertips=[]
-    for j,(x,length,width) in enumerate([(-.032,.087,.0114),(-.010,.097,.0122),(.013,.089,.0113),(.033,.070,.0098)]):
+    # Model a slightly relaxed open hand. A pre-curled mesh cannot be opened
+    # convincingly by rotating the wrist, so every phalanx has a real bone.
+    fingertips=[];finger_paths={}
+    for j,(name,x,length,width) in enumerate([('index',-.032,.087,.0114),('middle',-.010,.097,.0122),('ring',.013,.089,.0113),('little',.033,.070,.0098)]):
         start=-.104+(abs(x)*.28)
-        path=[(x,.004,start),(x,.003,start-length*.28),(x,-.015,start-length*.58),(x,-.044,start-length*.77),(x,-.051,start-length*.64)]
+        path=[(x,.004,start),(x,.002,start-length*.42),(x,-.003,start-length*.75),(x,-.010,start-length)]
+        finger_paths[name]=path
         vs=[];fs=[];N=16
         for k,p in enumerate(path):
-            r=width*[1,.98,.91,.80,.58][k]
-            tangent=Vector(path[min(k+1,4)])-Vector(path[max(k-1,0)])
+            r=width*[1,.96,.84,.57][k]
+            tangent=Vector(path[min(k+1,3)])-Vector(path[max(k-1,0)])
             tangent.normalize();axis=Vector((1,0,0));axis2=tangent.cross(axis).normalized()
             for i in range(N):
                 a=i*math.tau/N;q=Vector(p)+axis*math.cos(a)*r+axis2*math.sin(a)*r*.91;vs.append(H(q))
-        for k in range(4):
+        for k in range(3):
             for i in range(N):a=k*N+i;b=k*N+(i+1)%N;fs.append((a,b,b+N,a+N))
-        fs.extend([tuple(range(N-1,-1,-1)),tuple(4*N+i for i in range(N))])
+        fs.extend([tuple(range(N-1,-1,-1)),tuple(3*N+i for i in range(N))])
         parts.append(mesh('Finger '+str(j)+' '+side,vs,fs,skin,root))
-        # Visible nail is on the curved distal back of the finger.
-        fingertips.append((x,-.045,start-length*.695,width))
+        fingertips.append((name,x,-.007,start-length*.91,width))
         parts.append(sphere('Knuckle '+str(j)+' '+side,H((x,.010,start-.009)),(width*.98,.012,.014),skin,root,20,12))
-    thumbpath=[H((-.028,-.006,-.047)),H((-.059,-.012,-.074)),H((-.067,-.034,-.102)),H((-.045,-.049,-.12))]
+    finger_paths['thumb']=[(-.028,-.006,-.047),(-.054,-.009,-.073),(-.070,-.014,-.099),(-.074,-.023,-.123)]
+    thumbpath=[H(p) for p in finger_paths['thumb']]
     parts.append(tube('Thumb '+side,thumbpath,.015,skin,root,5))
     joined=join_objects(parts,'Sculpted anatomical hand '+side,root)
     bpy.context.view_layer.objects.active=joined
@@ -551,11 +553,73 @@ def build_hand(side):
     bpy.ops.object.modifier_apply(modifier=rem.name)
     smooth=joined.modifiers.new('Sculpt smoothing','SMOOTH');smooth.factor=.52;smooth.iterations=5;bpy.ops.object.modifier_apply(modifier=smooth.name)
     dec=joined.modifiers.new('Game sculpt optimisation','DECIMATE');dec.ratio=.44;bpy.ops.object.modifier_apply(modifier=dec.name)
-    for x,y,z,w in fingertips:
-        n=sphere('Natural fingernail '+side,H((x,y+.003,z-.003)),(w*.65,.002,.008),nailmat,root,20,12)
-        n.rotation_euler.x=math.radians(61)
+    nails=[]
+    fingertips.append(('thumb',-.073,-.019,-.116,.014))
+    for name,x,y,z,w in fingertips:
+        n=sphere('Natural fingernail '+name+' '+side,H((x,y+.007,z)),(w*.65,.0018,.0075),nailmat,root,20,12)
+        n.rotation_euler.x=math.radians(14)
+        nails.append((n,name))
     # Fine wrist crease and a tendon indicate actual hand anatomy at close range.
     tube('Wrist flexion crease '+side,[H((-.020,-.017,.006)),H((0,-.020,.007)),H((.020,-.017,.006))],.00055,crease,root,2)
+
+    rig_data=bpy.data.armatures.new('Anatomical hand skeleton '+side)
+    rig=bpy.data.objects.new('HandRig_'+side,rig_data);bpy.context.collection.objects.link(rig)
+    rig.location=V(at);parent(rig,root);rig.show_in_front=True
+    bpy.ops.object.select_all(action='DESELECT');rig.select_set(True);bpy.context.view_layer.objects.active=rig
+    bpy.ops.object.mode_set(mode='EDIT')
+    wrist=rig_data.edit_bones.new('hand_'+side+'_wrist');wrist.head=V((0,0,0));wrist.tail=V((0,0,-.080));wrist.align_roll(V((0,1,0)))
+    for name,path in finger_paths.items():
+        previous=wrist
+        for k in range(3):
+            bone=rig_data.edit_bones.new('hand_'+side+'_'+name+'_'+str(k+1))
+            bone.head=V((path[k][0]*mirror,path[k][1],path[k][2]))
+            bone.tail=V((path[k+1][0]*mirror,path[k+1][1],path[k+1][2]))
+            bone.align_roll(V((0,1,0)));bone.parent=previous;bone.use_connect=k>0;previous=bone
+    bpy.ops.object.mode_set(mode='OBJECT')
+    for bone in rig.pose.bones:bone.rotation_mode='XYZ'
+
+    def add_skin(obj, rigid_bone=None):
+        groups={b.name:obj.vertex_groups.new(name=b.name) for b in rig_data.bones}
+        if rigid_bone:
+            groups[rigid_bone].add(list(range(len(obj.data.vertices))),1,'REPLACE')
+        else:
+            # Nearest finger centreline selects a finger, then smooth joint bands
+            # blend consecutive phalanges. Palm/forearm stay on the wrist bone.
+            bpy.context.view_layer.update()
+            for vertex in obj.data.vertices:
+                world=obj.matrix_world@vertex.co;local=world-V(at)
+                q=Vector((local.x*mirror,local.z,-local.y))
+                candidates=[]
+                for name,path in finger_paths.items():
+                    path=[Vector(p) for p in path];distances=[];lengths=[0]
+                    for a,b in zip(path,path[1:]):lengths.append(lengths[-1]+(b-a).length)
+                    for k,(a,b) in enumerate(zip(path,path[1:])):
+                        d=b-a;t=max(0,min(1,(q-a).dot(d)/d.length_squared));near=a+d*t
+                        distances.append(((q-near).length,k,lengths[k]+t*d.length))
+                    distance,segment,along=min(distances)
+                    direction=(path[1]-path[0]).normalized()
+                    proximal=(q-path[0]).dot(direction)
+                    influence=max(0,min(1,(proximal+.016)/.029))
+                    if name=='thumb':influence*=max(0,min(1,(-q.x-.026)/.021))
+                    candidates.append((distance,name,along,lengths,influence))
+                distance,name,along,lengths,influence=min(candidates,key=lambda item:item[0])
+                # Outside the finger tube only the palm/wrist may influence skin.
+                influence*=max(0,min(1,(.026-distance)/.012))
+                weights=[1.,0.,0.]
+                for k in (1,2):
+                    half=.009 if name!='thumb' else .008
+                    t=max(0,min(1,(along-lengths[k]+half)/(2*half)));t=t*t*(3-2*t)
+                    weights[k-1]*=1-t;weights[k]=t
+                if influence<1:groups[wrist.name].add([vertex.index],1-influence,'REPLACE')
+                for k,w in enumerate(weights):
+                    if w*influence>.00001:groups['hand_'+side+'_'+name+'_'+str(k+1)].add([vertex.index],w*influence,'REPLACE')
+        mod=obj.modifiers.new('Live finger skin deformation','ARMATURE');mod.object=rig;mod.use_deform_preserve_volume=True
+        parent(obj,rig)
+    # The edit-bone handle is invalid after edit mode; use the stable name.
+    wrist_name='hand_'+side+'_wrist'
+    wrist=rig_data.bones[wrist_name]
+    add_skin(joined)
+    for obj,name in nails:add_skin(obj,'hand_'+side+'_'+name+'_3')
     return root
 
 build_hand('left');build_hand('right')
@@ -584,7 +648,7 @@ with open(os.path.join(ROOT,'public/models/playable-cart-layout.json'),'w') as f
 # Export actual Blender meshes as GLB. Cameras, QA lights and ground are excluded.
 bpy.ops.object.select_all(action='DESELECT')
 for o in bpy.context.scene.objects:
-    if o.type in ['MESH','EMPTY']:o.select_set(True)
+    if o.type in ['MESH','EMPTY','ARMATURE']:o.select_set(True)
 bpy.ops.export_scene.gltf(filepath=os.path.join(ROOT,'public/models/playable-cart.glb'),export_format='GLB',use_selection=True,export_apply=True,export_extras=True)
 
 scene=bpy.context.scene;scene.world.use_nodes=True

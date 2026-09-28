@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import {WebGPURenderer,PMREMGenerator,PostProcessing} from 'three/webgpu'
+import {WebGPURenderer,PMREMGenerator,PostProcessing,SpriteNodeMaterial} from 'three/webgpu'
 import {pass} from 'three/tsl'
 import {bloom} from 'three/addons/tsl/display/BloomNode.js'
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js'
@@ -8,6 +8,8 @@ import {CookingGestureTracker} from './gestures'
 import {wristForSpoonContact,SPOON_BOWL,HAND_GRIP,panFoodSurface,LADLE_REST_ROTATION,LADLE_REST_OFFSET} from './toolContact'
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js'
 import {INGREDIENT_LABELS,type CookingSimulation,type HandSide,type Ingredient,type Zone,type Vec3} from '../game/simulation'
+import {HandAnimator} from './HandAnimator'
+import {createFireOcclusion} from './fireOcclusion'
 import {WOK_HOME} from '../game/kitchen'
 
 type Layout={cameraMenu:Vec3;lookMenu:Vec3;cameraPlay:Vec3;lookPlay:Vec3;cameraFov:number;wokCenter:Vec3;wokRimHeight:number;wokRadius:number;foodSurface:Vec3;wokHandle:Vec3;burnerCenter:Vec3;trays:Record<string,Vec3>;bottles:Record<'oil'|'soy'|'oyster',Vec3>;tools:{serve:Vec3;knob:Vec3};handRest:Record<HandSide,Vec3>;handGripOffset:Vec3;prototypes:Record<Ingredient,string>}
@@ -51,7 +53,7 @@ export async function createStreetScene(container:HTMLElement,{simulation,onRend
  const ambient=new THREE.HemisphereLight('#b6c6de','#3a2d20',.32);scene.add(ambient)
  const key=new THREE.SpotLight('#ffead2',7.5,7,1.2,.96,2);key.position.set(-.15,2.3,.16);key.target.position.set(0,.96,-.04);key.castShadow=true;key.shadow.mapSize.set(2048,2048);key.shadow.bias=-.0004;key.shadow.normalBias=.002;scene.add(key,key.target)
  const fill=new THREE.DirectionalLight('#bdcce1',.45);fill.position.set(-3,4,2);scene.add(fill)
- const fireLight=new THREE.PointLight('#5899ff',.55,1.4,1.6);fireLight.position.set(0,1.075,0);scene.add(fireLight)
+ const fireLight=new THREE.PointLight('#5899ff',.55,1.4,1.6);fireLight.position.set(0,1.075,0);fireLight.castShadow=true;fireLight.shadow.mapSize.set(512,512);fireLight.shadow.camera.near=.012;fireLight.shadow.camera.far=1.8;fireLight.shadow.bias=-.00005;fireLight.shadow.normalBias=.001;scene.add(fireLight)
  let envTarget:THREE.RenderTarget|undefined,rawEnv:THREE.Texture|undefined
  try{
   rawEnv=await new HDRLoader().loadAsync('/environment/shanghai-bund-2k.hdr');rawEnv.mapping=THREE.EquirectangularReflectionMapping
@@ -83,7 +85,13 @@ export async function createStreetScene(container:HTMLElement,{simulation,onRend
   source.traverse(o=>{if(o instanceof THREE.Mesh){const geo=o.geometry.clone();const transform=new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z).multiply(o.matrixWorld);geo.applyMatrix4(transform);const materials=Array.isArray(o.material)?o.material.map(prepareMat):prepareMat(o.material);const m=new THREE.Mesh(geo,materials);m.name=o.name;m.castShadow=true;m.receiveShadow=true;root.add(m)}})
   cart.add(root);return root
  }
-const wok=extract('Wok'),ladleTool=extract('Ladle'),hands={left:extract('Hand_left'),right:extract('Hand_right')},bottles={oil:extract('Bottle_oil'),soy:extract('Bottle_soy'),oyster:extract('Bottle_oyster')},gasKnob=extract('GasKnob')
+function extractHand(name:string){
+ const source=gltf.scene.getObjectByName(name);if(!source)throw Error(`Missing ${name}`)
+ source.traverse(o=>{if(o instanceof THREE.Mesh){o.material=Array.isArray(o.material)?o.material.map(prepareMat):prepareMat(o.material);o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false}})
+ cart.attach(source);return source
+}
+const wok=extract('Wok'),ladleTool=extract('Ladle'),hands={left:extractHand('Hand_left'),right:extractHand('Hand_right')},bottles={oil:extract('Bottle_oil'),soy:extract('Bottle_soy'),oyster:extract('Bottle_oyster')},gasKnob=extract('GasKnob')
+ const handAnimators={left:new HandAnimator(hands.left),right:new HandAnimator(hands.right)}
  const bottleHomes={oil:bottles.oil.position.clone(),soy:bottles.soy.position.clone(),oyster:bottles.oyster.position.clone()}
  // The retained Hyper3D shell and its Blender worktop stay present in both cameras.
  const batches=new Map<THREE.Material,THREE.BufferGeometry[]>()
@@ -123,7 +131,7 @@ const wok=extract('Wok'),ladleTool=extract('Ladle'),hands={left:extract('Hand_le
  // Thin oil sheen conforms to the center of the concave pan.
  const sheen=new THREE.Mesh(new THREE.CircleGeometry(.145,64),new THREE.MeshPhysicalMaterial({color:'#a98733',roughness:.12,metalness:.18,transparent:true,opacity:.52,clearcoat:1,side:THREE.DoubleSide,depthWrite:false}));sheen.rotation.x=-Math.PI/2;sheen.position.set(0,.007,0);wokFood.add(sheen)
  const flames=new THREE.Group();flames.position.copy(v(layout.burnerCenter));scene.add(flames)
- const flameTex=effectTexture(),smokeTex=effectTexture(true)
+ const flameTex=effectTexture(),smokeTex=effectTexture(true),fireOcclusion=createFireOcclusion()
  // A gas ring reads as living fire only when it flickers in three layers: a
  // small blue combustion core, a yellow body that dominates at high flame,
  // and red-orange tongues that lick up and wander. All sizes breathe with
@@ -132,14 +140,14 @@ const wok=extract('Wok'),ladleTool=extract('Ladle'),hands={left:extract('Hand_le
  const flameLayers:FlameLayer[]=[]
  const addFlameLayer=(count:number,ring:number,colors:string[],base:[number,number],opacity:number,speed:number)=>{
   for(let i=0;i<count;i++){
-   const material=new THREE.SpriteMaterial({map:flameTex,color:colors[i%colors.length],transparent:true,opacity,blending:THREE.AdditiveBlending,depthWrite:false})
+   const material=new SpriteNodeMaterial({map:flameTex,color:colors[i%colors.length],transparent:true,opacity,blending:THREE.AdditiveBlending,depthTest:true,depthWrite:false});material.opacityNode=fireOcclusion.opacity
    const spr=new THREE.Sprite(material);flames.add(spr)
    flameLayers.push({spr,ring,a:i/count*Math.PI*2,seed:Math.random()*20,speed,base})
   }
  }
- addFlameLayer(14,.196,['#3f7dff','#5b9bff'],[.017,.052],.75,1)       // combustion core
- addFlameLayer(18,.212,['#ffc23e','#ffd76a','#ffb02e'],[.026,.10],.85,1.6) // yellow body
- addFlameLayer(14,.185,['#ff5a1f','#ff7a26','#e83c12'],[.034,.145],.8,2.3) // red tongues
+ addFlameLayer(28,.218,['#3f7dff','#5b9bff'],[.017,.052],.75,1)       // combustion core
+ addFlameLayer(20,.237,['#ffc23e','#ffd76a','#ffb02e'],[.026,.10],.85,1.6) // yellow body
+ addFlameLayer(12,.298,['#ff5a1f','#ff7a26','#e83c12'],[.024,.13],.65,2.3) // red tongues
  const flameBlue=new THREE.Color('#3f7dff'),flameYellow=new THREE.Color('#ffc23e'),flameOrange=new THREE.Color('#ff7a26'),flameRed=new THREE.Color('#ff3d14')
  const vapour:THREE.Sprite[]=[]
  for(let i=0;i<24;i++){const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:smokeTex,color:'#d9d3bc',transparent:true,opacity:0,depthWrite:false}));scene.add(sprite);vapour.push(sprite)}
@@ -181,7 +189,7 @@ function promptFor(zone:Zone|null){
 }
  const project=(position:THREE.Vector3)=>{const p=position.clone().project(camera),rect=container.getBoundingClientRect();return {x:(p.x*.5+.5)*rect.width,y:(-.5*p.y+.5)*rect.height,visible:p.z<1}}
  const tracker=new CookingGestureTracker()
- let lastX=0,lastY=0,lastMove=0,pointerSpeed=0,hover:Zone|null=null
+ let lastX=0,lastY=0,lastMove=0,pointerSpeed=0,hover:Zone|null=null,lastHand:HandSide='right'
  let dragStartX=0,dragStartY=0,dragStartPoint=new THREE.Vector3()
  function setRay(e:PointerEvent){const r=container.getBoundingClientRect();mouse.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);ray.setFromCamera(mouse,camera)}
  function findZone(){const hit=ray.intersectObjects(zones.map(z=>z.proxy),false)[0];if(hit){const item=zones.find(z=>z.proxy===hit.object)!;return {...item,point:hit.point}}return null}
@@ -190,12 +198,17 @@ function promptFor(zone:Zone|null){
   let best:HandSide|null=null,min=60
   for(const side of SIDES){const p=project(hands[side].position.clone().add(new THREE.Vector3(0,0,-.06))),d=Math.hypot(p.x-x,p.y-y);if(d<min){best=side;min=d}}
   const hit=ray.intersectObjects(SIDES.flatMap(side=>hands[side].children),true)[0]
-  if(hit)for(const side of SIDES)if(hands[side].children.includes(hit.object))return side
+  if(hit)for(const side of SIDES){let node:THREE.Object3D|null=hit.object;while(node){if(node===hands[side])return side;node=node.parent}}
+  for(const side of SIDES){const held=simulation.state.hands[side].held;const tool=['ladle','scoop'].includes(held)?ladleTool:['oil','soy','oyster'].includes(held)?bottles[held as keyof typeof bottles]:null;if(tool&&ray.intersectObject(tool,true).length)return side}
   return best
  }
+ function putDownHand(side:HandSide){simulation.putDown(side);if(drag===side){drag=null;tracker.reset();if(activePointer>=0&&container.hasPointerCapture(activePointer))container.releasePointerCapture(activePointer);activePointer=-1}cursor.hidden=true}
+ function onContext(e:MouseEvent){e.preventDefault()}
+ function onReleaseKey(e:KeyboardEvent){if(e.code!=='KeyR'||e.repeat||e.ctrlKey||e.metaKey||e.altKey||e.target instanceof HTMLInputElement)return;if(simulation.state.phase==='playing'){e.preventDefault();putDownHand(drag||lastHand)}}
  function onDown(e:PointerEvent){
+  if(e.button===2&&simulation.state.phase==='playing'){setRay(e);const side=drag||findHand(e);if(side){e.preventDefault();lastHand=side;putDownHand(side)}return}
   if(e.button!==0||simulation.state.phase!=='playing'||cameraBlend<.96)return
-  setRay(e);drag=findHand(e);if(!drag)return
+  setRay(e);drag=findHand(e);if(!drag)return;lastHand=drag
   activePointer=e.pointerId;container.setPointerCapture(e.pointerId);simulation.beginDrag(drag)
   lastX=dragStartX=e.clientX;lastY=dragStartY=e.clientY;lastMove=performance.now()
   dragStartPoint.copy(v(simulation.state.hands[drag].position));tracker.reset();container.style.cursor='grabbing';e.preventDefault()
@@ -228,12 +241,17 @@ function onUp(e:PointerEvent){
   activePointer=-1;container.style.cursor='grab'
  }
  function onCancel(){if(drag)simulation.endDrag(drag,null);drag=null;activePointer=-1;tracker.reset()}
- container.addEventListener('pointerdown',onDown);container.addEventListener('pointermove',onMove);container.addEventListener('pointerup',onUp);container.addEventListener('pointercancel',onCancel)
+ container.addEventListener('pointerdown',onDown);container.addEventListener('pointermove',onMove);container.addEventListener('pointerup',onUp);container.addEventListener('pointercancel',onCancel);container.addEventListener('contextmenu',onContext);window.addEventListener('keydown',onReleaseKey)
  const resize=()=>{const r=container.getBoundingClientRect();camera.aspect=r.width/r.height;camera.updateProjectionMatrix();renderer.setSize(r.width,r.height)};const observer=new ResizeObserver(resize);observer.observe(container);resize()
  const post=new PostProcessing(renderer),renderPass=pass(scene,camera),colorPass=renderPass.getTextureNode('output');post.outputNode=colorPass.add(bloom(colorPass,.11,.45,2.5))
  let previous=performance.now(),time=0,cameraBlend=0,panPhase=0,lastToss=0
  const bowlContacts={left:new THREE.Vector3(),right:new THREE.Vector3()},lastPayload:Record<HandSide,Ingredient|null>={left:null,right:null},releasedKind:Record<HandSide,Ingredient|null>={left:null,right:null},flipTimers={left:0,right:0}
  const pourOrigin:Partial<Record<Ingredient,THREE.Vector3>>={}
+ type ReleaseMotion={held:string;start:number;from:THREE.Vector3;rotation:THREE.Quaternion;place:THREE.Vector3;placeRotation:THREE.Quaternion}
+ const releases:Partial<Record<HandSide,ReleaseMotion>>={}
+ const previousHeld:Record<HandSide,string>={left:'none',right:'ladle'}
+ function visualHeld(side:HandSide){const r=releases[side];return r&&simulation.state.time-r.start<.28?r.held:simulation.state.hands[side].held}
+ const ease=(t:number)=>{t=clamp(t,0,1);return t*t*(3-2*t)}
  const lastPan=new THREE.Vector3(...layout.wokCenter),panDelta=new THREE.Vector3()
  const dummy=new THREE.Object3D(),work=new THREE.Vector3(),wrist=new THREE.Vector3(),target=new THREE.Vector3(),tempQ=new THREE.Quaternion(),up=new THREE.Vector3(0,1,0)
  function moveToolToHand(tool:THREE.Object3D,hand:THREE.Object3D){tool.position.copy(hand.position).add(v(layout.handGripOffset).applyQuaternion(hand.quaternion));tool.quaternion.copy(hand.quaternion)}
@@ -248,6 +266,7 @@ function onUp(e:PointerEvent){
   if(playing)panPhase+=delta*(3+panIntensity*12)
   wok.position.lerp(v(state.pan.position),1-Math.exp(-delta*24));wok.position.y+=state.toss*.012
   wok.rotation.set(panIntensity*Math.sin(panPhase)*.07-state.toss*.15-state.pan.tilt,0,panIntensity*Math.cos(panPhase)*.045)
+  wok.updateMatrixWorld(true);fireOcclusion.inverseWok.value.copy(wok.matrixWorld).invert()
   panDelta.copy(wok.position).sub(lastPan);lastPan.copy(wok.position)
   wokFood.position.copy(wok.position);wokFood.quaternion.copy(wok.quaternion)
   for(const z of zones){
@@ -258,13 +277,24 @@ function onUp(e:PointerEvent){
   const visualGrip=v(layout.handGripOffset)
   for(const side of SIDES){
    const h=state.hands[side],model=hands[side];model.visible=cameraBlend>.78
-   if(lastPayload[side]&&!h.payload&&!['oil','soy','oyster'].includes(h.held)){
+   if(menu){delete releases[side];previousHeld[side]=h.held}
+   if(previousHeld[side]!=='none'&&h.held==='none'){
+    const held=previousHeld[side],place=new THREE.Vector3(),placeRotation=new THREE.Quaternion()
+    if(['oil','soy','oyster'].includes(held)){place.copy(bottleHomes[held as keyof typeof bottleHomes]).add(new THREE.Vector3(0,.145,.10))}
+    else if(held==='wok'){place.copy(model.position);placeRotation.copy(model.quaternion)}
+    else{placeRotation.copy(LADLE_REST_ROTATION);place.copy(v(state.ladle.spot)).add(LADLE_REST_OFFSET).sub(visualGrip.clone().applyQuaternion(placeRotation))}
+    releases[side]={held,start:state.time,from:model.position.clone(),rotation:model.quaternion.clone(),place,placeRotation}
+   }
+   previousHeld[side]=h.held
+   const visibleItem=visualHeld(side)
+
+   if(lastPayload[side]&&!h.payload&&h.held!=='none'&&!['oil','soy','oyster'].includes(h.held)){
     releasedKind[side]=lastPayload[side];flipTimers[side]=.6
     pourOrigin[lastPayload[side]!]=bowlContacts[side].clone().sub(wok.position).applyQuaternion(wok.quaternion.clone().invert())
    }
    if(menu){flipTimers[side]=0;releasedKind[side]=null}lastPayload[side]=h.payload;if(playing)flipTimers[side]=Math.max(0,flipTimers[side]-delta)
    work.copy(v(h.position));const yaw=side==='left'?.19:-.16
-   const spoon=['ladle','scoop','egg'].includes(h.held)
+   const spoon=['ladle','scoop','egg'].includes(visibleItem)
    if(h.held==='wok'){
     // Match the palm to the same transformed wooden handle that moves the pan.
     const handle=v(layout.wokHandle).sub(v(layout.wokCenter)).applyQuaternion(wok.quaternion).add(wok.position)
@@ -275,7 +305,7 @@ function onUp(e:PointerEvent){
     wrist.copy(work).add(new THREE.Vector3(0,.065,.05))
     if(h.zone==='wok'){wrist.y=wok.position.y+.34;wrist.z+=.10}
    }else if(spoon&&(h.dragging||h.mode==='stirring'||h.payload||flipTimers[side]>0)){
-    const contact=work.clone()
+    const contact=work.clone();if(h.payload&&!h.dragging)contact.copy(wok.position).add(new THREE.Vector3(side==='left'?-.20:.23,.22,.16))
     if(h.mode==='stirring'){
      const local=h.dragging?work.clone().sub(wok.position).applyQuaternion(wok.quaternion.clone().invert()):new THREE.Vector3(Math.sin(time*(3+h.intensity*7))*.14,0,Math.cos(time*(3+h.intensity*7))*.095)
      const radius=Math.hypot(local.x,local.z);if(radius>.185){local.x*=.185/radius;local.z*=.185/radius}
@@ -291,11 +321,25 @@ function onUp(e:PointerEvent){
     // This is a contact constraint: smoothing the wrist would leave the bowl floating.
    }else if(h.dragging){wrist.copy(work).add(new THREE.Vector3(0,.025,.10));model.rotation.set(.05,yaw,0)}
    else {wrist.copy(v(layout.handRest[side]));wrist.y+=.045;model.rotation.set(.14,yaw,0)}
+   const release=releases[side]
+   if(release){
+    const age=state.time-release.start
+    if(age<.68){
+     if(release.held==='wok'){
+      release.placeRotation.setFromEuler(new THREE.Euler(-.13,-.58,0)).premultiply(wok.quaternion)
+      release.place.copy(v(layout.wokHandle).sub(v(layout.wokCenter)).applyQuaternion(wok.quaternion).add(wok.position)).sub(visualGrip.clone().applyQuaternion(release.placeRotation))
+     }
+     if(age<.28){const t=ease(age/.28);wrist.lerpVectors(release.from,release.place,t);wrist.y+=Math.sin(t*Math.PI)*.035;model.quaternion.slerpQuaternions(release.rotation,release.placeRotation,t)}
+     else{const t=ease((age-.28)/.4),rest=v(layout.handRest[side]).add(new THREE.Vector3(0,.045,0));wrist.lerpVectors(release.place,rest,t);wrist.y+=Math.sin(t*Math.PI)*.045;model.quaternion.slerpQuaternions(release.placeRotation,new THREE.Quaternion().setFromEuler(new THREE.Euler(.14,yaw,0)),t)}
+    }else delete releases[side]
+   }
+   if(h.held==='none'&&!h.dragging&&!release){wrist.y+=Math.sin(time*1.6+(side==='left'?0:1))*.0025;model.rotation.z+=Math.sin(time*1.4)*.012}
    model.position.copy(wrist)
+   handAnimators[side].update({...h,held:visibleItem},playing?delta:0,time)
    const projected=project(model.position.clone().add(new THREE.Vector3(0,.02,.04)))
    tags[side].style.transform=`translate(${projected.x}px,${projected.y}px) translate(-50%,32px)`
    tags[side].classList.toggle('is-dragging',h.dragging)
-   tags[side].querySelector('small')!.textContent=h.payload?INGREDIENT_LABELS[h.payload]+' · 画圈倒入':h.scoopProgress>0&&h.scoopProgress<1?'铲取 '+Math.round(h.scoopProgress*100)+'%':h.mode==='stirring'&&!h.dragging?'持续翻炒中':h.held==='wok'?'握锅 · 向上拖动提锅':['oil','soy','oyster'].includes(h.held)?'已握住 · 画圈转腕':'按住拖动'
+   tags[side].querySelector('small')!.textContent=h.payload?INGREDIENT_LABELS[h.payload]+' · 画圈倒入':h.scoopProgress>0&&h.scoopProgress<1?'铲取 '+Math.round(h.scoopProgress*100)+'%':h.mode==='stirring'&&!h.dragging?'持续翻炒中':h.held==='wok'?'握锅 · 右键放下':['oil','soy','oyster'].includes(h.held)?'握瓶 · 右键放下':'按住拖动'
    if(spoon){moveToolToHand(ladleTool,model);bowlContacts[side].copy(SPOON_BOWL).applyQuaternion(ladleTool.quaternion).add(ladleTool.position)}
    for(const kind of FOOD)carrier[side][kind].visible=false
    const loaded=h.payload||(flipTimers[side]>.3?releasedKind[side]:null)
@@ -310,13 +354,13 @@ function onUp(e:PointerEvent){
   }
   // There is one ladle on this cart. It is either carried by the hand that has
   // it, or lying flat on the front strip where the player left it.
-  const ladleHand=SIDES.find(side=>['ladle','scoop','egg'].includes(state.hands[side].held))
+  const ladleHand=SIDES.find(side=>['ladle','scoop','egg'].includes(visualHeld(side)))
   ladleTool.visible=cameraBlend>.78
   if(!ladleHand){
    ladleTool.position.copy(v(state.ladle.spot)).add(LADLE_REST_OFFSET)
    ladleTool.quaternion.copy(LADLE_REST_ROTATION)
   }
-  for(const kind of ['oil','soy','oyster'] as const){const bottle=bottles[kind],side=SIDES.find(side=>state.hands[side].held===kind)
+  for(const kind of ['oil','soy','oyster'] as const){const bottle=bottles[kind],side=SIDES.find(side=>visualHeld(side)===kind)
    if(side){const h=state.hands[side],hand=hands[side];bottle.quaternion.copy(hand.quaternion);bottle.position.copy(hand.position).add(new THREE.Vector3(0,-.145,-.10).applyQuaternion(hand.quaternion))
     if(h.mode==='pouring'){
      const start=new THREE.Vector3(0,kind==='oyster'?.275:.3,0).applyQuaternion(bottle.quaternion).add(bottle.position),end=new THREE.Vector3(wok.position.x+clamp(h.position[0]-wok.position.x,-.19,.19),wok.position.y+.025,wok.position.z+clamp(h.position[2]-wok.position.z,-.19,.19)),stream=streams[side],direction=end.clone().sub(start);stream.visible=!menu;stream.position.copy(start).add(end).multiplyScalar(.5);stream.scale.y=direction.length();stream.quaternion.setFromUnitVectors(up,direction.normalize());(stream.material as THREE.MeshPhysicalMaterial).color.set(kind==='oil'?'#c59943':kind==='soy'?'#401b09':'#24150b');stream.scale.x=stream.scale.z=kind==='oyster'?1.7:1
@@ -360,7 +404,7 @@ function onUp(e:PointerEvent){
    const n=Math.sin(time*f.speed*7+f.seed)*.5+Math.sin(time*f.speed*13.7+f.seed*2.7)*.35+Math.sin(time*f.speed*23.3+f.seed*4.3)*.2
    const h=f.base[1]*(.26+fire*(1.05+.55*n)+activity*.3)
    const w=f.base[0]*(.65+fire*.55+.22*n)
-   f.spr.position.set(Math.cos(f.a)*f.ring+Math.sin(time*f.speed*4.7+f.seed*1.3)*.014*fire,h*.44,Math.sin(f.a)*f.ring+Math.cos(time*f.speed*3.9+f.seed*2.1)*.014*fire)
+   f.spr.position.set(Math.cos(f.a)*f.ring+Math.sin(time*f.speed*4.7+f.seed*1.3)*.006*fire,h*.44,Math.sin(f.a)*f.ring+Math.cos(time*f.speed*3.9+f.seed*2.1)*.006*fire)
    f.spr.scale.set(w,Math.max(.012,h),1)
    f.spr.material.rotation=Math.sin(time*f.speed*3.1+f.seed)*.24
    const pulse=.72+.28*Math.sin(time*f.speed*9.3+f.seed*3.7)
@@ -370,16 +414,16 @@ function onUp(e:PointerEvent){
     f.spr.material.color.copy(flameBlue).lerp(flameYellow,clamp(fire*1.35,0,1))
     f.spr.material.opacity=fire*(.55+.4*pulse)
    }else{ // tongues: orange to deep red, strongest on a roaring fire
-    f.spr.material.color.copy(flameOrange).lerp(flameRed,clamp(fire*1.1,0,1))
-    f.spr.material.opacity=clamp(fire*1.25,0,1)*(.4+.45*pulse)
+    f.spr.material.color.copy(flameOrange).lerp(flameYellow,clamp(fire*.8,0,1))
+    f.spr.material.opacity=clamp((fire-.48)*1.7+activity*.3,0,1)*(.28+.30*pulse)*onFlame
    }
   }
-  fireLight.intensity=.25+fire*1.35+activity*.9
+  fireLight.intensity=fire*(.4+activity*.5)
   fireLight.color.copy(flameBlue).lerp(flameYellow,clamp(fire*1.15,0,1))
   vapour.forEach((s,i)=>{const t=(time*.32+i/24)%1,amount=clamp(foodQuantity*.2,0,1);s.position.set(wok.position.x+Math.sin(i*5+t*3)*(.12+t*.12),wok.position.y+.16+t*.70,wok.position.z+Math.cos(i*7+t*2)*.14);s.scale.set(.10+t*.25,.17+t*.4,1);s.material.opacity=amount*state.temperature*(1-t)*.26;s.material.rotation=Math.sin(i+time*.2)*.18})
   if(drag&&hover){const zone=zones.find(z=>z.zone===hover)!;targetRing.visible=true;targetRing.position.copy(zone.anchor);targetRing.position.y=hover==='wok'?wok.position.y+.14:zone.anchor.y+.09;targetRing.scale.setScalar(hover==='wok'?3:1)}else targetRing.visible=false
   post.render();frame=requestAnimationFrame(draw)
  }
  frame=requestAnimationFrame(draw)
- return ()=>{disposed=true;cancelAnimationFrame(frame);observer.disconnect();onCancel();container.removeEventListener('pointerdown',onDown);container.removeEventListener('pointermove',onMove);container.removeEventListener('pointerup',onUp);container.removeEventListener('pointercancel',onCancel);overlay.remove();renderer.domElement.remove();post.dispose();scene.traverse(o=>{if(o instanceof THREE.Mesh||o instanceof THREE.Sprite){if(o instanceof THREE.Mesh)o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material])m.dispose()}});flameTex.dispose();smokeTex.dispose();groundTex.dispose();ironMicro.dispose();envTarget?.dispose();rawEnv?.dispose();renderer.dispose()}
+ return ()=>{disposed=true;cancelAnimationFrame(frame);observer.disconnect();onCancel();container.removeEventListener('pointerdown',onDown);container.removeEventListener('pointermove',onMove);container.removeEventListener('pointerup',onUp);container.removeEventListener('pointercancel',onCancel);container.removeEventListener('contextmenu',onContext);window.removeEventListener('keydown',onReleaseKey);overlay.remove();renderer.domElement.remove();post.dispose();scene.traverse(o=>{if(o instanceof THREE.Mesh||o instanceof THREE.Sprite){if(o instanceof THREE.Mesh)o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material])m.dispose()}});flameTex.dispose();smokeTex.dispose();groundTex.dispose();ironMicro.dispose();envTarget?.dispose();rawEnv?.dispose();renderer.dispose()}
 }
