@@ -28,7 +28,7 @@ export const WOK_MAX_LIFT = .55
 /** Pan floor height when it is set down anywhere on the stainless worktop. */
 export const WORKTOP = { top: 1.003, min: [-1.195, -.87], max: [1.195, .49] }
 /** The gas knob on the counter front lip, left of the stove. */
-export const KNOB = { x: -.39, z: .463 }
+export const KNOB = { x: -.76, z: .43 }
 /** The pan can be lowered to the worktop, but never through the bench itself. */
 const REST_FLOOR = WORKTOP.top - wokUnderside(0)
 

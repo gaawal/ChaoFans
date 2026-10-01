@@ -10,7 +10,7 @@ export type HandMode = 'idle' | 'holding' | 'stirring' | 'panning' | 'pouring' |
 export type HeldItem = 'none' | 'ladle' | 'wok' | Bottle | 'scoop' | 'egg'
 export type Skill = 'pot' | 'spoon' | 'fire' | 'oil' | 'egg' | 'seasoning' | 'stamina'
 /** Gesture recognizer sends progress increments, rather than pointer velocity. */
-export interface GestureInput { sweep?: number; circle?: number; tilt?: number }
+export interface GestureInput { sweep?: number; circle?: number; tilt?: number; /** Actual bowl-to-food collider overlap. */ contact?: boolean }
 
 export interface HandState {
   mode: HandMode
@@ -58,9 +58,13 @@ export interface CookingState {
   pan: { position: Vec3; tilt: number; lift: number }
   /** There is one ladle. It is either carried by a hand or lying on the worktop. */
   ladle: { resting: boolean; spot: Vec3 }
+  /** Bottle resting places can change when a touch releases them on the cart. */
+  bottleSpots: Record<Bottle,Vec3>
   food: Record<Ingredient | Bottle, number>
   quality: [number, number, number]
   temperature: number
+  /** Brief flare above the food when oil hits an already-hot wok. */
+  hotOilFlash: number
   /** Gas knob position, 0 = off. The knob itself is on the counter front lip. */
   fire: number
   /** Short impulse for particle height and pan animation; decays every update. */
@@ -113,6 +117,7 @@ const hand = (side: HandSide): HandState => ({
   dragging: false, zone: 'rest', intensity: 0, scoopProgress: 0, circleProgress: 0, tilt: 0, releasedAt: null,
 })
 const emptyFood = (): CookingState['food'] => ({ rice: 0, carrot: 0, onion: 0, bacon: 0, scallion: 0, egg: 0, corn: 0, peas: 0, ham: 0, oil: 0, soy: 0, oyster: 0 })
+const bottleSpots = (): CookingState['bottleSpots'] => ({ oil: [-.91,1.147,-.68], soy: [-.71,1.147,-.68], oyster: [-.50,1.147,-.68] })
 const emptySkills = (): CookingState['skills'] => ({ pot: 0, spoon: 0, fire: 0, oil: 0, egg: 0, seasoning: 0, stamina: 0 })
 
 export const priceFor = (meats: number, vegetables: number) => 4 + 4 * meats + 2 * vegetables
@@ -149,8 +154,8 @@ function makeOrder(id: number, random: () => number): CookingOrder {
 function initialState(random: () => number): CookingState {
   return {
     phase: 'menu', hands: { left: hand('left'), right: hand('right') }, pan: { position: [...WOK_HOME], tilt: 0, lift: 0 },
-    ladle: { resting: false, spot: [0, LADLE_REST.y, LADLE_REST.z] }, food: emptyFood(),
-    quality: [0, 0, 0], temperature: .25, fire: .65, toss: 0, motion: 0, burnt: 0, cooked: 0, time: 0,
+    ladle: { resting: false, spot: [0, LADLE_REST.y, LADLE_REST.z] }, bottleSpots: bottleSpots(), food: emptyFood(),
+    quality: [0, 0, 0], temperature: .25, hotOilFlash: 0, fire: .65, toss: 0, motion: 0, burnt: 0, cooked: 0, time: 0,
     hint: '走近餐车，亲手炒出今晚的第一份饭。', event: 0,
     order: makeOrder(1, random), coins: 0, xp: 0, level: 1, completed: 0,
     result: null, upgrades: [], skills: emptySkills(), notice: '餐车就是你的厨房。',
@@ -176,6 +181,8 @@ export class CookingSimulation {
   private collisionCooldown = 0
   private lastCollisionProp: string | null = null
   private tossCooldown = 0
+  private hotOilCooldown = 0
+  private hotOilDose = 0
   private milestone = 0
   /** Where a released pan is travelling to; the rack catches it on the way down. */
   private panSettle: Vec3 | null = null
@@ -216,14 +223,18 @@ export class CookingSimulation {
     this.collisionCooldown = 0
     this.lastCollisionProp = null
     this.tossCooldown = 0
+    this.hotOilCooldown = 0
+    this.hotOilDose = 0
     this.milestone = 0
     this.panSettle = null
     this.state.hands = { left: hand('left'), right: hand('right') }
     this.state.pan = { position: [...WOK_HOME], tilt: 0, lift: 0 }
     this.state.ladle = { resting: false, spot: [0, LADLE_REST.y, LADLE_REST.z] }
+    this.state.bottleSpots = bottleSpots()
     this.state.food = emptyFood()
     this.state.quality = [0, 0, 0]
     this.state.temperature = .25
+    this.state.hotOilFlash = 0
     this.state.toss = 0
     this.state.motion = 0
     this.state.burnt = 0
@@ -348,7 +359,8 @@ export class CookingSimulation {
       current.mode = 'turning'
       current.intensity = 0
       const previous = this.state.fire
-      this.state.fire = clamp((point[0] - (KNOB.x - .105)) / .21)
+      const setting = (point[0] - (KNOB.x - .105)) / .21
+      this.state.fire = setting > 1 - 1e-8 ? 1 : clamp(setting)
       if (Math.abs(this.state.fire - previous) > .04 && (this.state.fire === 0 || (previous === 0 && this.state.fire > 0))) {
         this.feedback(this.state.fire === 0 ? '灶关了。往右推旋钮，火就回来。' : '开火了，火苗腾起来。')
       }
@@ -406,7 +418,7 @@ export class CookingSimulation {
         this.scoopKind[side] = zone
         current.scoopProgress = 0
       }
-      current.scoopProgress = clamp(current.scoopProgress + progress(gesture.sweep))
+      if (gesture.contact !== false) current.scoopProgress = clamp(current.scoopProgress + progress(gesture.sweep))
       if (current.scoopProgress >= 1) {
         current.payload = zone
         current.held = 'scoop'
@@ -547,7 +559,7 @@ export class CookingSimulation {
   }
 
   /** Explicitly open this hand and safely return its object, with or without a drag. */
-  putDown = (side: HandSide) => {
+  putDown = (side: HandSide, at?: Vec3) => {
     if (this.state.phase !== 'playing') return
     const current = this.state.hands[side]
     if (current.held === 'none') return
@@ -558,8 +570,9 @@ export class CookingSimulation {
         ? '松开锅柄，正在把锅放回锅架。' : '松开锅柄，正在把锅放到台面上。')
     } else if (isBottle(current.held)) {
       const label = BOTTLE_LABELS[current.held]
+      if (at) this.state.bottleSpots[current.held] = [clamp(at[0], -1.11, 1.11), 1.147, clamp(at[2], -.76, .43)]
       this.releaseObject(side)
-      this.feedback(`${label}瓶放回架上。`)
+      this.feedback(at ? `${label}瓶放在台面上。` : `${label}瓶放回架上。`)
     } else if (this.holdsLadle(current)) {
       const notice = current.payload
         ? `${INGREDIENT_LABELS[current.payload]}倒回备料盘，锅铲也搁在台面上了。`
@@ -709,9 +722,12 @@ export class CookingSimulation {
     s.order = { ...s.order, patience: Math.max(0, s.order.patience - dt) }
     this.collisionCooldown = Math.max(0, this.collisionCooldown - dt)
     this.tossCooldown = Math.max(0, this.tossCooldown - dt)
+    this.hotOilCooldown = Math.max(0, this.hotOilCooldown - dt)
+    s.hotOilFlash = Math.max(0, s.hotOilFlash - dt * 1.65)
     s.toss = Math.max(0, s.toss - dt * 1.5)
     s.pan = { ...s.pan, tilt: s.pan.tilt * Math.exp(-dt * 3) }
 
+    let hotOilFlow = false
     for (const side of SIDES) {      const current = s.hands[side]
       if (current.mode === 'stirring' && current.dragging && s.time - this.lastStirMotion[side] > .15) {
         // A held mouse controls the spoon directly. Only releasing starts the
@@ -726,9 +742,22 @@ export class CookingSimulation {
         const key = current.held
         const oldAmount = s.food[key]
         s.food = { ...s.food, [key]: clamp(oldAmount + dt * POUR_RATES[key]) }
+        if (key === 'oil' && s.food.oil > oldAmount) {
+          hotOilFlow = true
+          if (s.temperature >= .58 && s.fire >= .52 && s.pan.lift < .12) {
+            this.hotOilDose += s.food.oil - oldAmount
+            if (this.hotOilDose >= .025 && this.hotOilCooldown <= 0) {
+              s.hotOilFlash = 1
+              this.hotOilCooldown = 2.8
+              this.hotOilDose = 0
+              this.feedback('热油入锅，锅气轰地炸开！')
+            }
+          }
+        }
         if (key !== 'oil') this.soyWarmth += (s.food[key] - oldAmount) * clamp(this.stirWork / 10) * (key === 'oyster' ? .75 : 1)
       }
     }
+    if (!hotOilFlow) this.hotOilDose = 0
 
     this.refreshMotion()
     if (this.handsCollide() && this.collisionCooldown <= 0) {

@@ -232,16 +232,16 @@ for i in range(8):
     a=i*math.tau/8
     pts=[(r*math.cos(a),y,r*math.sin(a)) for r,y in TRIVET_PROFILE]
     tube('Cast iron pan support',pts,PRONG_RADIUS,darksteel,burner,2)
-# The gas knob lives on the counter front lip, left of the stove. The game
-# rotates the 'GasKnob' group around its vertical axis to match the fire level.
-knobroot=group('GasKnob',(-.39,.968,.463),cart)
-cylinder('Gas knob base',(-.39,.955,.463),.054,.020,darksteel,knobroot)
-cylinder('Gas knob cap',(-.39,.976,.463),.047,.024,rubber,knobroot)
-cylinder('Gas knob hub',(-.39,.993,.463),.010,.008,polish,knobroot)
-cube('Gas knob indicator',(-.356,.988,.463),(.042,.007,.011),polish,.002,knobroot)
+# Keep the valve on the visible worktop edge, clear of the wok handle and
+# rice tray. Its broad indicator can be read from the cook's camera.
+knobroot=group('GasKnob',(-.76,1.038,.43),cart)
+cylinder('Gas knob base',(-.76,1.014,.43),.071,.020,darksteel,knobroot)
+cylinder('Gas knob cap',(-.76,1.038,.43),.061,.030,rubber,knobroot)
+cylinder('Gas knob hub',(-.76,1.057,.43),.012,.008,polish,knobroot)
+cube('Gas knob indicator',(-.713,1.052,.43),(.055,.008,.013),polish,.002,knobroot)
 for i in range(11):
     a=math.radians(-135+27*i)
-    cylinder('Gas knob tick',(-.39+math.cos(a)*.062,.961,.463+math.sin(a)*.062),.0026,.005,polish,knobroot,vertices=8)
+    cylinder('Gas knob tick',(-.76+math.cos(a)*.081,1.016,.43+math.sin(a)*.081),.0032,.005,polish,knobroot,vertices=8)
 
 wok=group('Wok',(0,1.1,0))
 verts=[];faces=[];segments=112;rings=19
@@ -637,7 +637,7 @@ layout={
     'wokHandle':[-.43,1.28,.44], 'burnerCenter':[0,1.055,0],
     'trays':anchors,
     'bottles':{'oil':[-.91,1.147,-.68],'soy':[-.71,1.147,-.68],'oyster':[-.50,1.147,-.68]},
-    'tools':{'ladle':[.30,1.28,.38],'ladleGrip':[.30,1.28,.38],'ladleBowl':[.30,1.218,-.024],'serve':[1.45,1.014,-.04],'burner':[-.39,.96,.463],'knob':[-.39,.985,.463]},
+    'tools':{'ladle':[.30,1.28,.38],'ladleGrip':[.30,1.28,.38],'ladleBowl':[.30,1.218,-.024],'serve':[1.45,1.014,-.04],'burner':[0,1.055,0],'knob':[-.76,1.038,.43]},
     'handRest':hand_rests,'handGripOffset':[0,-.025,-.105],
     'prototypes':{k:'FoodPrototype_'+k for k in protos},
     'nodes':{'static':'CartShell','wok':'Wok','ladle':'Ladle','oil':'Bottle_oil','soy':'Bottle_soy','oyster':'Bottle_oyster','leftHand':'Hand_left','rightHand':'Hand_right'},

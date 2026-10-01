@@ -19,30 +19,30 @@ function start() {
   return sim
 }
 
-const KNOB: Vec3 = [-.39, 1.15, .463]
+const KNOB: Vec3 = [-.76, 1.15, .43]
 
 test('the gas knob sets the fire level absolutely, and the burner answers to it', () => {
   const sim = start()
   assert.equal(sim.state.fire, .65)
   // Drag the hand across the knob: the further right, the stronger the flame.
   sim.beginDrag('left')
-  sim.moveHand('left', 'knob', [-.495, 1.15, .463], .4)
+  sim.moveHand('left', 'knob', [KNOB[0] - .105, KNOB[1], KNOB[2]], .4)
   assert.equal(sim.state.fire, 0)
-  sim.moveHand('left', 'knob', [-.285, 1.15, .463], .4)
+  sim.moveHand('left', 'knob', [KNOB[0] + .105, KNOB[1], KNOB[2]], .4)
   assert.equal(sim.state.fire, 1)
-  sim.moveHand('left', 'knob', [-.39, 1.15, .463], .4)
+  sim.moveHand('left', 'knob', KNOB, .4)
   assert.ok(Math.abs(sim.state.fire - .5) < 1e-8)
   sim.endDrag('left', 'knob')
   assert.match(sim.state.notice, /火力调到 50%/)
   // Off flame, the pan over the burner cools; wide open, it climbs past .8.
   sim.beginDrag('left')
-  sim.moveHand('left', 'knob', [-.495, 1.15, .463], .4)
+  sim.moveHand('left', 'knob', [KNOB[0] - .105, KNOB[1], KNOB[2]], .4)
   sim.endDrag('left', 'knob')
   advance(sim, 30)
   const cold = sim.state.temperature
   assert.ok(cold < .2, `burner off should cool the pan, got ${cold}`)
   sim.beginDrag('left')
-  sim.moveHand('left', 'knob', [-.285, 1.15, .463], .4)
+  sim.moveHand('left', 'knob', [KNOB[0] + .105, KNOB[1], KNOB[2]], .4)
   sim.endDrag('left', 'knob')
   advance(sim, 30)
   assert.ok(sim.state.temperature > .75, `full flame should be hot, got ${sim.state.temperature}`)
@@ -181,6 +181,15 @@ test('ingredients require real scoop sweeps and a circle to overturn the loaded 
   assert.equal(sim.state.food.onion, 0)
   assert.equal(sim.state.hands.right.payload, null)
   assert.equal(sim.state.hands.right.held, 'ladle')
+})
+
+test('a scoop stroke without bowl-to-food contact cannot collect an ingredient', () => {
+  const sim = start()
+  sim.beginDrag('right')
+  for (let i = 0; i < 5; i++) sim.moveHand('right', 'carrot', TRAY, .8, {sweep: .4, contact: false})
+  assert.equal(sim.state.hands.right.payload, null)
+  sim.moveHand('right', 'carrot', TRAY, .8, {sweep: 1, contact: true})
+  assert.equal(sim.state.hands.right.payload, 'carrot')
 })
 
 test('scooped food stays held between drags until an explicit overturn gesture', () => {
@@ -346,6 +355,35 @@ test('bottles require confirmed grip and wrist rotation; release stops pouring b
     sim.endDrag('left', kind)
     assert.equal(sim.state.hands.left.held, 'none')
   }
+})
+
+test('hot oil flares only in a preheated wok and the burst fades', () => {
+  const cold = start()
+  bottle(cold, 'oil', .4)
+  assert.equal(cold.state.hotOilFlash, 0)
+
+  const hot = start()
+  advance(hot, 22)
+  assert.ok(hot.state.temperature >= .58)
+  hot.beginDrag('left')
+  hot.moveHand('left', 'oil', TRAY, .2)
+  hot.endDrag('left', 'oil')
+  hot.beginDrag('left')
+  circle(hot, 'left')
+  advance(hot, .3)
+  assert.ok(hot.state.hotOilFlash > .2, 'hot oil should flare above the wok')
+  advance(hot, 1)
+  assert.equal(hot.state.hotOilFlash, 0)
+})
+
+test('releasing a touched bottle records its new place on the cart', () => {
+  const sim = start()
+  sim.beginDrag('left')
+  sim.moveHand('left', 'oyster', TRAY, .2)
+  sim.endDrag('left', 'oyster')
+  sim.putDown('left', [.35, 1.3, .2])
+  assert.deepEqual(sim.state.bottleSpots.oyster, [.35, 1.147, .2])
+  assert.equal(sim.state.hands.left.held, 'none')
 })
 
 test('a few pointer strokes teach a stir that keeps going after releasing the hand', () => {
